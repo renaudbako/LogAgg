@@ -4,7 +4,7 @@ Centralized settings for all components.
 """
 import platform
 from dataclasses import dataclass, field
-from typing import List
+from typing import Dict, List
 
 PLATFORM = platform.system().lower()  # 'linux', 'windows', 'darwin'
 
@@ -116,6 +116,37 @@ class Config:
         "System", "Application", "Security",
         "Microsoft-Windows-PowerShell/Operational",
     ])
+
+    # ── Authentication ───────────────────────────────────────────
+    auth_enabled: bool = False
+    auth_token:   str  = ""          # set a strong secret; empty = disabled
+
+    # ── Webhook notifications ─────────────────────────────────────
+    webhook_enabled:   bool = False
+    webhook_url:       str  = ""     # Slack / Discord / generic URL
+    webhook_type:      str  = "slack"   # "slack" | "discord" | "generic"
+    webhook_min_level: str  = "WARNING"
+    webhook_timeout:   int  = 8
+
+    # ── ML model persistence ──────────────────────────────────────
+    ml_model_path: str = "logagg_iforest.pkl"
+
+    # ── Process monitor ───────────────────────────────────────────
+    process_monitor_enabled:  bool = True
+    process_monitor_interval: int  = 10   # seconds between snapshots
+
+    # ── DNS monitor ───────────────────────────────────────────────
+    dns_monitor_enabled:   bool = True
+    dns_monitor_interval:  int  = 30
+
+    # ── Severity-based log retention (days; None = keep forever) ──
+    retention_days: Dict[str, int] = field(default_factory=lambda: {
+        "DEBUG":    7,
+        "INFO":     7,
+        "WARNING":  30,
+        "ERROR":    90,
+        # CRITICAL not listed → kept forever
+    })
 
     # ── Security detection rules ─────────────────────────────────
     alert_rules: List[AlertRule] = field(default_factory=lambda: [

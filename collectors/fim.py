@@ -60,25 +60,25 @@ def _file_meta(path: str) -> Optional[Tuple[str, int, int]]:
 class FileIntegrityMonitor:
     """
     Monitors a list of files and directories for changes.
-    Calls `on_entry` with a LogEntry for each integrity event.
+    Baseline is persisted to the database so changes during downtime
+    are detected on the next restart without false-positive storms.
     """
 
-    def __init__(self, config, on_entry: Callable[[LogEntry], None]):
+    def __init__(self, config, on_entry: Callable[[LogEntry], None],
+                 db=None):
         self._config = config
         self._on_entry = on_entry
+        self._db = db                    # optional Database instance for persistence
         self._platform = platform.system().lower()
         self._rescan_interval = getattr(config, "fim_rescan_interval", 60)
 
-        # path → (sha256, size, mode)
         self._baseline: Dict[str, Tuple[str, int, int]] = {}
         self._lock = threading.Lock()
         self._running = False
         self._observer: Optional["Observer"] = None
         self._rescan_thread: Optional[threading.Thread] = None
 
-        # Directories to watch recursively
         self._watch_dirs: Set[str] = set()
-        # Individual files to watch
         self._watch_files: Set[str] = set()
 
         self._load_watch_list()
@@ -104,12 +104,21 @@ class FileIntegrityMonitor:
 
     def start(self):
         self._running = True
+        # Load persisted baseline first (avoids false positives on restart)
+        if self._db:
+            try:
+                persisted = self._db.load_fim_baseline()
+                if persisted:
+                    with self._lock:
+                        self._baseline = persisted
+            except Exception:
+                pass
+        # Then build/refresh the live baseline
         self._build_baseline()
 
         if _HAS_WATCHDOG and self._watch_dirs:
             self._start_watchdog()
 
-        # Always run rescan thread as belt-and-suspenders
         self._rescan_thread = threading.Thread(
             target=self._rescan_loop, daemon=True, name="fim-rescan")
         self._rescan_thread.start()
@@ -197,13 +206,20 @@ class FileIntegrityMonitor:
         with self._lock:
             baseline_files = set(self._baseline.keys())
 
-        # Check existing
         for path in current_files:
             self._check_file(path, "rescan")
 
-        # Detect deletions
         for path in baseline_files - current_files:
             self._handle_deletion(path)
+
+        # Persist updated baseline to DB
+        if self._db:
+            try:
+                with self._lock:
+                    snapshot = dict(self._baseline)
+                self._db.save_fim_baseline(snapshot)
+            except Exception:
+                pass
 
     # ── File checking ──────────────────────────────────────────
 

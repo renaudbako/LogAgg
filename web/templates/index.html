@@ -547,6 +547,10 @@ table.data-table tr.warning-row td{color:var(--yellow)}
     <button class="btn" id="btn-clear">✕ CLEAR</button>
     <button class="btn" id="btn-export">↓ EXPORT</button>
     <input id="search" type="text" placeholder="Filter stream…">
+    <span style="font-size:10px;color:var(--muted2);flex-shrink:0">FROM</span>
+    <input id="f-since" type="datetime-local" style="background:var(--bg);border:1px solid var(--border2);color:var(--text);font-family:var(--font-mono);font-size:10px;padding:3px 6px;border-radius:var(--radius);outline:none;width:148px">
+    <span style="font-size:10px;color:var(--muted2);flex-shrink:0">TO</span>
+    <input id="f-until" type="datetime-local" style="background:var(--bg);border:1px solid var(--border2);color:var(--text);font-family:var(--font-mono);font-size:10px;padding:3px 6px;border-radius:var(--radius);outline:none;width:148px">
     <span class="rate-indicator" id="ingest-rate">0 ev/s</span>
     <button class="btn" id="btn-refresh">↻ REFRESH</button>
     <button class="btn" id="btn-retrain">⟳ RETRAIN ML</button>
@@ -732,7 +736,13 @@ const S = {
 // ═══════════════════════════════════════════════════════
 // WebSocket
 // ═══════════════════════════════════════════════════════
-const socket = io('/logs', {transports:['websocket','polling'], reconnectionDelay:2000});
+const socket = io('/logs', {
+  transports: ['websocket', 'polling'],
+  reconnectionDelay: 2000,
+  reconnectionDelayMax: 30000,
+  reconnectionAttempts: Infinity,
+  query: { token: document.cookie.match(/logagg_token=([^;]+)/)?.[1] || '' }
+});
 
 socket.on('connect', () => {
   setBadge(true);
@@ -1624,6 +1634,7 @@ async function loadStats() {
     document.getElementById('ml-buffer').textContent = `${s.ml_buffer||0} / ${trainSize}`;
     document.getElementById('ml-train-size').textContent = trainSize;
     document.getElementById('ml-prog').style.width = Math.min(100, Math.round(((s.ml_buffer||0)/trainSize)*100))+'%';
+    if (s.ml_trained_at) { const el=document.getElementById('ml-cont'); if(el) el.textContent='trained '+new Date(s.ml_trained_at).toLocaleString('en-GB',{dateStyle:'short',timeStyle:'short',hour12:false}); }
 
     // Alert KPI from stats
     setKPI('k-alerts', (s.unacked_alerts||0).toString(), s.unacked_alerts>0?'c-yellow':'c-muted');
@@ -1651,10 +1662,14 @@ async function loadInitial() {
     const params = new URLSearchParams({limit:300});
     if (S.levelFilter)  params.set('level',   S.levelFilter);
     if (S.sourceFilter) params.set('source',  S.sourceFilter);
-    if (S.searchFilter || S.searchFilter) params.set('search', S.searchFilter);
+    if (S.searchFilter) params.set('search',  S.searchFilter);
     if (S.anomalyOnly)  params.set('anomaly_only','true');
     if (S.catFilter)    params.set('category', S.catFilter);
     if (S.tacticFilter) params.set('mitre_tactic', S.tacticFilter);
+    const since = document.getElementById('f-since')?.value;
+    const until = document.getElementById('f-until')?.value;
+    if (since) params.set('since', since);
+    if (until) params.set('until', until);
 
     const entries = await fetchJson('/api/logs?' + params);
     const stream = document.getElementById('log-stream');
@@ -1719,6 +1734,40 @@ document.getElementById('btn-refresh').addEventListener('click', loadInitial);
 document.getElementById('btn-retrain').addEventListener('click', async () => {
   await fetch('/api/retrain', {method:'POST'});
   loadStats();
+});
+
+// Time-range pickers
+let _trDebounce;
+['f-since','f-until'].forEach(id => {
+  document.getElementById(id).addEventListener('change', () => {
+    clearTimeout(_trDebounce);
+    _trDebounce = setTimeout(loadInitial, 400);
+  });
+});
+
+// Correlated multi-stage attack events
+socket.on('correlation', ev => {
+  bumpBadge('alerts');
+  // Show as a special alert card
+  const a = {
+    rule_name: `🔗 ${ev.chain}`,
+    level: ev.severity.toLowerCase(),
+    message: ev.summary,
+    source: 'correlation-engine',
+    timestamp: ev.timestamp,
+    tech_description: ev.description,
+    matched_rules: [ev.chain],
+    mitre_tactic: ev.tactics?.[ev.tactics.length-1] || '',
+    category: 'log',
+    acknowledged: 0,
+  };
+  S.alertsData.unshift(a);
+  if (S.alertsData.length > 500) S.alertsData.length = 500;
+  renderRPAlerts();
+  if (S.currentTab === 'alerts') renderAlertsTab();
+  updateAlertKPI();
+  // Flash the ATT&CK badge
+  bumpBadge('attack', 1);
 });
 
 document.getElementById('btn-ack-all').addEventListener('click', async () => {

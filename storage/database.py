@@ -65,6 +65,14 @@ CREATE TABLE IF NOT EXISTS alerts (
 CREATE INDEX IF NOT EXISTS idx_alert_ts   ON alerts(timestamp);
 CREATE INDEX IF NOT EXISTS idx_alert_rule ON alerts(rule_name);
 
+CREATE TABLE IF NOT EXISTS fim_baseline (
+    path        TEXT PRIMARY KEY,
+    sha256      TEXT NOT NULL,
+    size        INTEGER DEFAULT 0,
+    mode        TEXT DEFAULT '',
+    updated_at  TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS stats (
     key   TEXT PRIMARY KEY,
     value TEXT
@@ -86,6 +94,11 @@ class Database:
 
     def _init_schema(self):
         with self._engine.begin() as conn:
+            # WAL mode: ~3× write throughput, non-blocking reads
+            conn.execute(text("PRAGMA journal_mode=WAL"))
+            conn.execute(text("PRAGMA synchronous=NORMAL"))
+            conn.execute(text("PRAGMA cache_size=-32000"))   # 32 MB
+            conn.execute(text("PRAGMA temp_store=MEMORY"))
             for stmt in _DDL.strip().split(";"):
                 stmt = stmt.strip()
                 if stmt:
@@ -356,13 +369,64 @@ class Database:
             result.append(d)
         return result
 
-    def prune_old(self, days: int = 7):
-        cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+    def prune_old(self, retention: Optional[Dict[str, int]] = None):
+        """
+        Severity-based retention.  `retention` maps level → days to keep.
+        Defaults: CRITICAL=forever, ERROR=90d, WARNING=30d, INFO/DEBUG=7d.
+        """
+        default_retention = {
+            "DEBUG":    7,
+            "INFO":     7,
+            "WARNING":  30,
+            "ERROR":    90,
+            "CRITICAL": None,   # keep forever
+        }
+        plan = {**default_retention, **(retention or {})}
         with self._engine.begin() as conn:
+            for level, days in plan.items():
+                if days is None:
+                    continue
+                cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+                conn.execute(text(
+                    "DELETE FROM log_entries WHERE level=:lvl AND timestamp < :c"
+                ), {"lvl": level, "c": cutoff})
+            # Purge old acknowledged alerts older than 30 days
+            alert_cutoff = (datetime.now() - timedelta(days=30)).isoformat()
             conn.execute(text(
-                "DELETE FROM log_entries WHERE timestamp < :c"), {"c": cutoff})
-            conn.execute(text(
-                "DELETE FROM alerts WHERE timestamp < :c AND acknowledged=1"), {"c": cutoff})
+                "DELETE FROM alerts WHERE timestamp < :c AND acknowledged=1"
+            ), {"c": alert_cutoff})
+
+    # ── FIM baseline persistence ──────────────────────────────
+
+    def save_fim_baseline(self, baseline: Dict[str, tuple]):
+        """
+        Persist FIM SHA-256 baseline to DB so it survives restarts.
+        `baseline` is {path: (sha256, size, mode)}.
+        """
+        now = datetime.now().isoformat()
+        with self._engine.begin() as conn:
+            conn.execute(text("DELETE FROM fim_baseline"))
+            for path, (sha256, size, mode) in baseline.items():
+                conn.execute(text("""
+                    INSERT INTO fim_baseline (path, sha256, size, mode, updated_at)
+                    VALUES (:p, :h, :s, :m, :ts)
+                """), {"p": path, "h": sha256, "s": size,
+                       "m": oct(mode), "ts": now})
+
+    def load_fim_baseline(self) -> Dict[str, tuple]:
+        """Restore FIM baseline from DB. Returns {path: (sha256, size, mode)}."""
+        with self._engine.connect() as conn:
+            rows = conn.execute(text(
+                "SELECT path, sha256, size, mode FROM fim_baseline"
+            )).fetchall()
+        result = {}
+        for path, sha256, size, mode_str in rows:
+            try:
+                mode = int(mode_str, 8) if mode_str.startswith("0o") else int(mode_str or "0o644", 8)
+            except ValueError:
+                mode = 0o644
+            result[path] = (sha256, size, mode)
+        return result
 
     # ── Helpers ────────────────────────────────────────────────
 
