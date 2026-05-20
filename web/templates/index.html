@@ -1,0 +1,1851 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>LogAgg — Threat Intelligence</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&family=Syne:wght@400;700;800&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js"></script>
+<style>
+/* ── Tokens ────────────────────────────────────────────────── */
+:root{
+  --bg:#070b10;--surface:#0b1017;--surface2:#0f1520;--surface3:#131d28;
+  --border:#18232f;--border2:#1f2e3c;--border3:#2a3f52;
+  --text:#b4c8d8;--muted:#3a5268;--muted2:#4d6878;--bright:#d0e4f0;
+  --accent:#00d4ff;--accent2:#008faa;--accent3:#00354a;
+  --green:#00e676;--green2:#00a854;
+  --yellow:#ffd740;--yellow2:#c9a800;
+  --orange:#ff7043;--orange2:#c04020;
+  --red:#ff1744;--red2:#aa0020;
+  --purple:#d500f9;--teal:#1de9b6;--lime:#c6ff00;
+  --font-mono:'JetBrains Mono',monospace;
+  --font-ui:'Syne',sans-serif;
+  --radius:3px;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--font-mono);font-size:13px;overflow:hidden}
+button{cursor:pointer;font-family:var(--font-mono)}
+input,select{font-family:var(--font-mono)}
+::-webkit-scrollbar{width:4px;height:4px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--border2);border-radius:2px}
+::-webkit-scrollbar-thumb:hover{background:var(--accent2)}
+
+/* ── Shell ─────────────────────────────────────────────────── */
+#shell{display:grid;grid-template-rows:46px 34px 1fr;height:100vh;gap:1px;background:var(--border)}
+
+/* ── Topbar ─────────────────────────────────────────────────── */
+#topbar{background:var(--surface);display:flex;align-items:center;gap:12px;padding:0 16px;border-bottom:1px solid var(--border2)}
+#logo{font-family:var(--font-ui);font-size:16px;font-weight:800;letter-spacing:-.5px;color:var(--accent);display:flex;align-items:center;gap:8px;flex-shrink:0}
+.logo-pulse{width:8px;height:8px;background:var(--accent);border-radius:50%;box-shadow:0 0 8px var(--accent);animation:pulse 2s ease-in-out infinite;flex-shrink:0}
+@keyframes pulse{0%,100%{opacity:1;box-shadow:0 0 10px var(--accent)}50%{opacity:.3;box-shadow:0 0 3px var(--accent)}}
+.kpi{display:flex;flex-direction:column;gap:1px;padding:3px 12px;border-left:1px solid var(--border2);flex-shrink:0;min-width:80px}
+.kpi-lbl{color:var(--muted2);font-size:9px;text-transform:uppercase;letter-spacing:1px}
+.kpi-val{font-size:14px;font-weight:500;transition:color .3s}
+.kpi-val.c-accent{color:var(--accent)}.kpi-val.c-red{color:var(--red)}.kpi-val.c-yellow{color:var(--yellow)}
+.kpi-val.c-teal{color:var(--teal)}.kpi-val.c-green{color:var(--green)}.kpi-val.c-muted{color:var(--muted2)}
+.kpi-delta{font-size:9px;color:var(--muted2);margin-top:1px}
+#conn-badge{margin-left:auto;padding:3px 10px;border-radius:var(--radius);font-size:10px;letter-spacing:1px;text-transform:uppercase;display:flex;align-items:center;gap:5px;flex-shrink:0}
+#conn-badge.live{background:#001c10;color:var(--green);border:1px solid var(--green2)}
+#conn-badge.off{background:#1c0500;color:var(--orange);border:1px solid var(--orange2)}
+.conn-dot{width:6px;height:6px;border-radius:50%;background:currentColor}
+
+/* ── Tabbar ─────────────────────────────────────────────────── */
+#tabbar{background:var(--surface2);display:flex;align-items:stretch;border-bottom:1px solid var(--border2)}
+.tab{padding:0 16px;font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--muted2);cursor:pointer;display:flex;align-items:center;gap:6px;border-bottom:2px solid transparent;transition:color .15s,border-color .15s;white-space:nowrap}
+.tab:hover{color:var(--text)}.tab.active{color:var(--accent);border-bottom-color:var(--accent)}
+.tbadge{background:var(--border2);color:var(--muted2);font-size:9px;padding:1px 5px;border-radius:2px;transition:background .2s,color .2s;min-width:20px;text-align:center}
+.tbadge.hot{background:#2a0018;color:var(--red);animation:badge-flash .5s ease}
+@keyframes badge-flash{0%{transform:scale(1.2)}100%{transform:scale(1)}}
+
+/* ── Workspace ──────────────────────────────────────────────── */
+#workspace{display:grid;grid-template-columns:190px 1fr 290px;gap:1px;overflow:hidden}
+
+/* ── Sidebar ─────────────────────────────────────────────────── */
+#sidebar{background:var(--surface);overflow-y:auto;padding:10px 0;display:flex;flex-direction:column;gap:14px}
+.sb-sec{padding:0 0 4px}
+.sb-title{font-size:9px;color:var(--muted2);letter-spacing:2px;text-transform:uppercase;padding:0 12px 6px;display:flex;align-items:center;justify-content:space-between}
+.sb-title span{color:var(--muted);font-size:9px;letter-spacing:0}
+.filt{padding:0 10px;margin-bottom:6px}
+.filt label{display:block;color:var(--muted2);font-size:9px;letter-spacing:1px;text-transform:uppercase;margin-bottom:3px}
+.filt input,.filt select{width:100%;background:var(--bg);border:1px solid var(--border2);color:var(--text);font-size:11px;padding:4px 7px;border-radius:var(--radius);outline:none;transition:border-color .15s}
+.filt input:focus,.filt select:focus{border-color:var(--accent2)}
+.filt select option{background:var(--surface)}
+.lvl-btn{display:flex;align-items:center;gap:7px;padding:5px 12px;cursor:pointer;border-radius:2px;transition:background .08s;user-select:none}
+.lvl-btn:hover{background:var(--border)}.lvl-btn.active{background:var(--border2)}
+.lvl-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0}
+.lvl-name{flex:1;font-size:11px}.lvl-cnt{color:var(--muted);font-size:10px;min-width:28px;text-align:right}
+.tog-row{display:flex;align-items:center;justify-content:space-between;padding:5px 12px;cursor:pointer;border-radius:2px}
+.tog-row:hover{background:var(--border)}
+.tog-lbl{font-size:11px;color:var(--muted2)}
+.toggle{width:24px;height:12px;background:var(--border2);border-radius:6px;position:relative;transition:background .2s;flex-shrink:0}
+.toggle.on{background:var(--accent2)}.toggle::after{content:'';position:absolute;top:2px;left:2px;width:8px;height:8px;border-radius:50%;background:#fff;transition:left .15s}
+.toggle.on::after{left:14px}
+
+/* ── Main ────────────────────────────────────────────────────── */
+#main{background:var(--bg);display:flex;flex-direction:column;overflow:hidden;position:relative}
+#toolbar{display:flex;align-items:center;gap:6px;padding:6px 10px;background:var(--surface);border-bottom:1px solid var(--border);flex-shrink:0;flex-wrap:wrap}
+.btn{background:var(--border);border:1px solid var(--border2);color:var(--text);font-size:10px;padding:4px 9px;border-radius:var(--radius);letter-spacing:.4px;transition:border-color .12s,color .12s,background .12s}
+.btn:hover{border-color:var(--accent2);color:var(--accent)}.btn.active{background:var(--accent3);border-color:var(--accent2);color:var(--accent)}
+.btn.danger{border-color:var(--red2);color:var(--orange)}
+.btn.danger:hover{border-color:var(--red);color:var(--red)}
+#search{flex:1;min-width:120px;background:var(--bg);border:1px solid var(--border2);color:var(--text);font-size:11px;padding:4px 9px;border-radius:var(--radius);outline:none;transition:border-color .15s}
+#search:focus{border-color:var(--accent2)}
+#search::placeholder{color:var(--muted)}
+.rate-indicator{font-size:10px;color:var(--muted2);padding:0 6px;white-space:nowrap}
+
+/* ── Tab panels ─────────────────────────────────────────────── */
+.panel{display:none;flex:1;overflow:hidden;flex-direction:column}
+.panel.active{display:flex}
+
+/* ── LOG STREAM ─────────────────────────────────────────────── */
+#log-stream{flex:1;overflow-y:auto;font-size:11px;contain:layout style}
+.log-row{display:grid;grid-template-columns:148px 62px 8px 1fr;gap:0 7px;padding:2px 10px;border-bottom:1px solid transparent;align-items:baseline;transition:background .06s;min-height:22px}
+.log-row:hover{background:var(--surface);border-bottom-color:var(--border)}
+.log-row.anomaly{border-left:2px solid var(--purple);padding-left:8px}
+.log-row.has-mitre{cursor:pointer}
+.log-row.new{animation:rowflash .3s ease-out}
+@keyframes rowflash{from{background:#001a20}to{background:transparent}}
+.log-row.expanded{background:var(--surface2);border-bottom-color:var(--border2)}
+.r-ts{color:var(--muted);font-size:9px;white-space:nowrap;padding-top:2px}
+.r-lvl{font-size:9px;font-weight:500;text-align:center;border-radius:2px;padding:1px 4px;letter-spacing:.4px}
+.lvl-DEBUG{background:#0a1318;color:#3d6080}
+.lvl-INFO{background:#001820;color:var(--accent)}
+.lvl-WARNING{background:#1a1100;color:var(--yellow)}
+.lvl-ERROR{background:#1a0600;color:var(--orange)}
+.lvl-CRITICAL{background:#1a0012;color:var(--red)}
+.r-mitre{width:8px;height:8px;border-radius:50%;margin-top:3px;flex-shrink:0;transition:box-shadow .2s}
+.r-main{overflow:hidden;display:flex;flex-direction:column;gap:1px}
+.r-src{color:var(--accent2);font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.r-msg{color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.r-msg.wrap{white-space:normal;word-break:break-all}
+.r-tags{display:flex;gap:4px;flex-wrap:wrap;margin-top:2px}
+.r-tag{font-size:9px;padding:1px 5px;border-radius:2px;background:var(--border);color:var(--muted2)}
+.r-tag.mitre{background:transparent;border:1px solid;font-weight:500}
+.r-tag.rule{background:#1a1400;color:var(--yellow);border:1px solid #2a2000}
+.r-tag.anomaly{background:#1a0020;color:var(--purple);border:1px solid #2a0030}
+/* Inline detail */
+.row-detail{grid-column:1/-1;background:var(--surface2);border:1px solid var(--border2);border-radius:var(--radius);margin:4px 0 6px;padding:10px;display:none;gap:12px}
+.row-detail.open{display:grid;grid-template-columns:1fr 1fr}
+.rd-col h5{font-size:9px;color:var(--muted2);letter-spacing:1.5px;text-transform:uppercase;margin-bottom:6px}
+.rd-field{display:flex;gap:6px;margin-bottom:4px;align-items:baseline}
+.rd-k{font-size:9px;color:var(--muted2);min-width:90px;flex-shrink:0;text-transform:uppercase;letter-spacing:.4px}
+.rd-v{font-size:10px;color:var(--bright);word-break:break-all}
+.mitre-chip{display:inline-flex;align-items:center;gap:5px;padding:2px 8px;border-radius:2px;font-size:10px;font-weight:500;border:1px solid}
+.rd-raw{grid-column:1/-1;background:var(--bg);border:1px solid var(--border);padding:7px;border-radius:2px;font-size:10px;color:var(--muted2);white-space:pre-wrap;max-height:80px;overflow-y:auto;margin-top:6px}
+.stream-empty{display:flex;align-items:center;justify-content:center;height:200px;color:var(--muted2);font-size:12px}
+
+/* ── NETWORK TAB ────────────────────────────────────────────── */
+#net-layout{flex:1;overflow:hidden;display:grid;grid-template-rows:180px 1fr;gap:1px;background:var(--border)}
+.net-top-row{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--border)}
+.net-block{background:var(--surface);padding:10px;overflow-y:auto}
+.block-hdr{font-size:9px;color:var(--muted2);letter-spacing:2px;text-transform:uppercase;margin-bottom:7px;display:flex;align-items:center;justify-content:space-between}
+.block-hdr .badge{font-size:9px;padding:1px 5px;border-radius:2px}
+table.data-table{width:100%;border-collapse:collapse;font-size:10px}
+table.data-table th{color:var(--muted2);font-size:9px;text-transform:uppercase;letter-spacing:.8px;font-weight:400;padding:3px 6px;border-bottom:1px solid var(--border2);text-align:left;white-space:nowrap}
+table.data-table td{padding:4px 6px;border-bottom:1px solid var(--border);color:var(--text);vertical-align:top}
+table.data-table tr:hover td{background:var(--surface2)}
+table.data-table tr.suspicious td{color:var(--red)}
+table.data-table tr.suspicious td:first-child::before{content:'⚠ ';color:var(--red)}
+table.data-table tr.warning-row td{color:var(--yellow)}
+.ip-cell{font-family:var(--font-mono);color:var(--accent2)}
+.port-cell{color:var(--yellow)}
+.proc-cell{color:var(--teal)}
+#net-events-stream{flex:1;overflow-y:auto;background:var(--surface)}
+.net-ev{display:grid;grid-template-columns:120px 58px 160px 60px 28px 1fr;gap:0 6px;padding:4px 10px;border-bottom:1px solid var(--border);align-items:baseline;cursor:pointer;font-size:10px}
+.net-ev:hover{background:var(--surface2)}
+.net-ev.critical-ev{border-left:2px solid var(--red);padding-left:8px}
+.net-ev.warning-ev{border-left:2px solid var(--yellow);padding-left:8px}
+.net-ev-detail{display:none;grid-column:1/-1;background:var(--bg);padding:8px;border-radius:2px;margin:2px 0 5px;font-size:10px;border:1px solid var(--border)}
+.net-ev-detail.open{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.ev-empty{padding:20px;color:var(--muted2);font-size:11px;text-align:center}
+
+/* ── FIM TAB ─────────────────────────────────────────────────── */
+#fim-layout{flex:1;overflow:hidden;display:grid;grid-template-rows:170px 1fr;gap:1px;background:var(--border)}
+.fim-top-row{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--border)}
+.fim-block{background:var(--surface);padding:10px;overflow-y:auto}
+#fim-events-stream{flex:1;overflow-y:auto;background:var(--surface)}
+.fim-ev{display:grid;grid-template-columns:120px 82px 84px 1fr;gap:0 7px;padding:4px 10px;border-bottom:1px solid var(--border);align-items:baseline;cursor:pointer;font-size:10px}
+.fim-ev:hover{background:var(--surface2)}
+.fim-ev.critical-row{border-left:2px solid var(--red);padding-left:8px}
+.fim-ev.warning-row{border-left:2px solid var(--yellow);padding-left:8px}
+.fim-badge{font-size:9px;padding:1px 5px;border-radius:2px;text-transform:uppercase;font-weight:500;text-align:center}
+.fim-MODIFIED{background:#1a0012;color:var(--red)}
+.fim-DELETED{background:#2a0010;color:var(--red)}
+.fim-CREATED{background:#001a10;color:var(--teal)}
+.fim-PERMISSION_CHANGED{background:#1a1000;color:var(--yellow)}
+.fim-ev-detail{display:none;grid-column:1/-1;background:var(--bg);padding:8px;border-radius:2px;margin:2px 0 5px;font-size:10px;border:1px solid var(--border)}
+.fim-ev-detail.open{display:grid;grid-template-columns:100px 1fr;gap:4px 8px}
+.stat-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.stat-card{background:var(--bg);border:1px solid var(--border2);border-radius:var(--radius);padding:8px;text-align:center}
+.stat-card .sc-val{font-size:20px;font-weight:700;font-family:var(--font-ui)}
+.stat-card .sc-lbl{font-size:9px;color:var(--muted2);text-transform:uppercase;letter-spacing:.8px;margin-top:2px}
+
+/* ── ALERTS TAB ─────────────────────────────────────────────── */
+#alerts-layout{
+  flex:1;
+  overflow:hidden;          /* clip to panel bounds */
+  display:flex;
+  flex-direction:column;    /* flex instead of grid — simpler overflow chain */
+  gap:1px;
+  background:var(--border);
+  min-height:0;             /* allow flex child to shrink below content size */
+}
+#alerts-toolbar{
+  background:var(--surface);
+  padding:8px 12px;
+  display:flex;
+  align-items:center;
+  gap:8px;
+  flex-wrap:wrap;
+  flex-shrink:0;            /* toolbar never shrinks */
+}
+#alerts-search{background:var(--bg);border:1px solid var(--border2);color:var(--text);font-size:11px;padding:4px 8px;border-radius:var(--radius);outline:none;width:200px}
+#alerts-search:focus{border-color:var(--accent2)}
+#alerts-search::placeholder{color:var(--muted)}
+#alerts-stream{
+  flex:1;
+  min-height:0;             /* ← THE key fix: lets this flex child actually scroll */
+  overflow-y:auto;
+  padding:10px 12px;
+  display:flex;
+  flex-direction:column;
+  gap:8px;
+}
+/* Cards: NO overflow:hidden — it was clipping expanded body near scroll edge */
+.alert-card{
+  background:var(--surface);
+  border:1px solid;
+  border-radius:var(--radius);
+  flex-shrink:0;            /* cards never compress vertically */
+  transition:opacity .2s, box-shadow .2s;
+}
+.alert-card:hover{box-shadow:0 0 0 1px var(--border3)}
+.alert-card.acked{opacity:.35}
+.alert-card.critical{border-color:#3a0018}
+.alert-card.warning{border-color:#3a2000}
+.alert-card.info{border-color:var(--border2)}
+.alert-card.open{box-shadow:0 0 0 1px var(--border3)}
+
+/* Header row — flex is simpler and more reliable than grid here */
+.ac-header{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  padding:9px 12px;
+  cursor:pointer;
+  border-left:4px solid transparent;   /* severity colour set by JS */
+  border-radius:var(--radius) var(--radius) 0 0;
+  user-select:none;
+  min-width:0;
+}
+.ac-header-left{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  flex:1;                /* grow to fill available space */
+  min-width:0;           /* allow text-overflow to work */
+  overflow:hidden;
+}
+.ac-badge{
+  font-size:9px;
+  padding:2px 7px;
+  border-radius:2px;
+  font-weight:500;
+  text-transform:uppercase;
+  flex-shrink:0;           /* badge never compresses */
+  letter-spacing:.4px;
+}
+.ac-badge.critical{background:#2a0018;color:var(--red)}
+.ac-badge.warning{background:#2a1200;color:var(--orange)}
+.ac-badge.info{background:var(--accent3);color:var(--accent)}
+
+.ac-rule{
+  font-size:12px;
+  font-weight:500;
+  color:var(--bright);
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  flex:1;                  /* rule takes all remaining left-side space */
+  min-width:0;             /* required for ellipsis to fire */
+}
+
+.ac-source{
+  font-size:10px;
+  color:var(--accent2);
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  max-width:160px;
+  flex-shrink:0;
+}
+
+.ac-time{
+  font-size:10px;
+  color:var(--muted2);
+  white-space:nowrap;
+  flex-shrink:0;
+}
+
+.ac-ack-btn{
+  background:transparent;
+  border:1px solid var(--border2);
+  color:var(--muted2);
+  font-size:9px;
+  padding:3px 9px;
+  border-radius:2px;
+  cursor:pointer;
+  flex-shrink:0;
+  transition:border-color .12s,color .12s,background .12s;
+  letter-spacing:.3px;
+}
+.ac-ack-btn:hover{border-color:var(--green2);color:var(--green);background:#001a0a}
+
+.ac-chevron{
+  font-size:14px;
+  color:var(--muted2);
+  flex-shrink:0;
+  transition:transform .2s;
+  line-height:1;
+}
+.alert-card.open .ac-chevron{transform:rotate(90deg)}
+
+/* ── Expanded body ── */
+.ac-body{
+  display:none;
+  border-top:1px solid var(--border2);
+  padding:12px 14px 14px;
+  background:var(--surface2);
+  border-radius:0 0 var(--radius) var(--radius);
+}
+.alert-card.open .ac-body{display:block}
+
+/* Two-column detail grid (matches log row detail style) */
+.ac-detail-grid{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:14px;
+}
+@media(max-width:700px){.ac-detail-grid{grid-template-columns:1fr}}
+.ac-detail-col h5{
+  font-size:9px;
+  color:var(--muted2);
+  letter-spacing:1.5px;
+  text-transform:uppercase;
+  margin-bottom:8px;
+  padding-bottom:4px;
+  border-bottom:1px solid var(--border);
+}
+.ac-row{display:flex;gap:8px;margin-bottom:5px;align-items:baseline;flex-wrap:wrap}
+.ac-k{font-size:9px;color:var(--muted2);min-width:100px;flex-shrink:0;text-transform:uppercase;letter-spacing:.4px;padding-top:1px}
+.ac-v{font-size:11px;color:var(--bright);word-break:break-all;line-height:1.4}
+.ac-v.mono{font-family:var(--font-mono);font-size:10px}
+
+/* MITRE block */
+.ac-mitre-block{
+  margin-top:10px;
+  padding:8px 10px;
+  background:var(--bg);
+  border:1px solid var(--border2);
+  border-radius:var(--radius);
+  display:flex;
+  flex-direction:column;
+  gap:6px;
+}
+.ac-mitre-block .mb-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.ac-mitre-block .mb-label{font-size:9px;color:var(--muted2);text-transform:uppercase;letter-spacing:.8px;min-width:70px}
+.mitre-chip{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:2px;font-size:10px;font-weight:500;border:1px solid;letter-spacing:.3px}
+
+/* Tech description */
+.ac-tech-desc{
+  margin-top:8px;
+  font-size:10px;
+  color:var(--muted2);
+  padding:6px 10px;
+  border-left:3px solid var(--border2);
+  background:var(--bg);
+  line-height:1.6;
+  border-radius:0 2px 2px 0;
+}
+
+/* Log excerpt */
+.ac-excerpt{
+  margin-top:10px;
+}
+.ac-excerpt-label{
+  font-size:9px;
+  color:var(--muted2);
+  text-transform:uppercase;
+  letter-spacing:.8px;
+  margin-bottom:4px;
+}
+.ac-excerpt-body{
+  background:var(--bg);
+  border:1px solid var(--border);
+  border-radius:2px;
+  padding:8px 10px;
+  font-size:10px;
+  color:var(--text);
+  word-break:break-all;
+  line-height:1.6;
+  font-family:var(--font-mono);
+  white-space:pre-wrap;
+  max-height:120px;
+  overflow-y:auto;
+}
+
+/* Rules tags row */
+.ac-rules{margin-top:8px;display:flex;gap:5px;flex-wrap:wrap}
+
+.alerts-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;height:200px;color:var(--muted2);font-size:12px;gap:8px}
+.alerts-empty .icon{font-size:36px;opacity:.25}
+
+/* ── ATT&CK TAB ─────────────────────────────────────────────── */
+#attack-layout{flex:1;overflow:hidden;display:flex;flex-direction:column}
+#attack-toolbar{background:var(--surface);padding:8px 12px;display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--border)}
+#attack-toolbar select{background:var(--bg);border:1px solid var(--border2);color:var(--text);font-size:11px;padding:3px 8px;border-radius:var(--radius);outline:none}
+#attack-summary{display:flex;gap:16px;font-size:10px;color:var(--muted2);margin-left:auto}
+#attack-summary span{color:var(--text)}
+#attack-body{flex:1;overflow-y:auto;padding:12px}
+.tactic-lane{margin-bottom:22px}
+.tactic-hdr{display:flex;align-items:center;gap:8px;margin-bottom:7px;padding-bottom:5px;border-bottom:1px solid var(--border2);cursor:pointer}
+.tactic-label{font-family:var(--font-ui);font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.8px}
+.tactic-id-tag{font-size:9px;padding:1px 5px;border-radius:2px;font-family:var(--font-mono)}
+.tactic-count{margin-left:auto;font-size:10px;color:var(--muted2)}
+.tactic-count.active{color:var(--bright);font-weight:500}
+.tactic-bar{flex:1;max-width:120px;height:3px;background:var(--border2);border-radius:2px;overflow:hidden}
+.tactic-bar-fill{height:100%;border-radius:2px;transition:width .6s}
+.tech-grid{display:flex;flex-wrap:wrap;gap:5px}
+.tech-card{padding:6px 10px;border-radius:var(--radius);border:1px solid;cursor:pointer;min-width:150px;max-width:240px;transition:transform .1s,opacity .1s}
+.tech-card:hover{transform:translateY(-1px);opacity:.9}
+.tc-id{font-size:9px;letter-spacing:.5px;margin-bottom:3px}
+.tc-tactic{font-size:9px;margin-bottom:2px;opacity:.7}
+.tc-name{font-size:10px;font-weight:500;line-height:1.3}
+.tc-sub{font-size:9px;opacity:.7;margin-top:1px;line-height:1.2}
+.tc-cnt{font-size:11px;font-weight:700;margin-top:4px}
+.tc-bar{height:3px;background:rgba(255,255,255,.1);border-radius:2px;margin-top:4px;overflow:hidden}
+.tc-bar-fill{height:100%;border-radius:2px}
+.heat-0{background:#0c1018;border-color:var(--border2);color:var(--muted2)}
+.heat-1{background:#00141e;border-color:#004055}
+.heat-2{background:#1a1000;border-color:#443000}
+.heat-3{background:#1a0800;border-color:#502000}
+.heat-4{background:#1a0012;border-color:#500025}
+.no-activity{color:var(--muted);font-size:10px;padding:4px 0}
+
+/* ── Right panel ────────────────────────────────────────────── */
+#right{background:var(--surface);overflow-y:auto;display:flex;flex-direction:column;gap:1px}
+.rp-block{background:var(--surface);padding:10px 12px;flex-shrink:0}
+.rp-block+.rp-block{border-top:1px solid var(--border)}
+.rp-hdr{font-size:9px;color:var(--muted2);letter-spacing:1.8px;text-transform:uppercase;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between}
+.rp-hdr-cnt{background:var(--border2);color:var(--text);font-size:9px;padding:1px 5px;border-radius:2px}
+.rp-hdr-cnt.hot{background:#2a0018;color:var(--red)}
+#chart-wrap{height:100px;position:relative}
+.lv-bar-row{display:flex;align-items:center;gap:5px;margin-bottom:5px}
+.lv-bar-row .k{width:54px;font-size:9px;color:var(--muted2);flex-shrink:0}
+.lv-track{flex:1;height:4px;background:var(--border);border-radius:2px;overflow:hidden}
+.lv-fill{height:100%;border-radius:2px;transition:width .6s}
+.lv-bar-row .v{width:32px;text-align:right;font-size:9px;color:var(--text)}
+/* Recent alerts in right panel (compact) */
+.ra-item{padding:6px 0;border-bottom:1px solid var(--border);display:flex;flex-direction:column;gap:2px;cursor:pointer}
+.ra-item:hover .ra-rule{color:var(--accent)}
+.ra-item:last-child{border-bottom:none}
+.ra-row1{display:flex;align-items:center;gap:6px}
+.ra-sev{width:6px;height:6px;border-radius:50%;flex-shrink:0}
+.ra-rule{font-size:10px;font-weight:500;color:var(--bright);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ra-time{font-size:9px;color:var(--muted2);flex-shrink:0}
+.ra-src{font-size:9px;color:var(--accent2);padding-left:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ra-mitre{font-size:9px;color:var(--muted2);padding-left:12px}
+.ml-row{display:flex;justify-content:space-between;margin-bottom:4px}
+.ml-row .k{font-size:10px;color:var(--muted2)}.ml-row .v{font-size:10px}
+.v-ready{color:var(--green)}.v-training{color:var(--yellow)}.v-waiting{color:var(--muted2)}
+.bar-track{height:4px;background:var(--border);border-radius:2px;overflow:hidden;margin-top:4px}
+.bar-fill-ml{height:100%;background:linear-gradient(90deg,var(--accent2),var(--teal));border-radius:2px;transition:width .5s}
+.cat-row{display:flex;align-items:center;gap:7px;margin-bottom:4px}
+.cat-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0}
+.cat-name{flex:1;font-size:10px;color:var(--muted2)}
+.cat-val{font-size:10px;color:var(--text)}
+.view-all-btn{width:100%;background:transparent;border:1px solid var(--border2);color:var(--muted2);font-size:10px;padding:5px;border-radius:var(--radius);margin-top:6px;transition:border-color .12s,color .12s;letter-spacing:.4px}
+.view-all-btn:hover{border-color:var(--accent2);color:var(--accent)}
+
+/* ── Misc ───────────────────────────────────────────────────── */
+.mono{font-family:var(--font-mono)}
+.empty-state{display:flex;align-items:center;justify-content:center;padding:20px;color:var(--muted2);font-size:11px}
+</style>
+</head>
+<body>
+<div id="shell">
+
+<!-- TOPBAR -->
+<header id="topbar">
+  <div id="logo"><div class="logo-pulse"></div>LogAgg</div>
+  <div class="kpi"><span class="kpi-lbl">Total Events</span><span class="kpi-val c-accent" id="k-total">—</span></div>
+  <div class="kpi"><span class="kpi-lbl">Anomalies</span><span class="kpi-val c-red" id="k-anom">—</span></div>
+  <div class="kpi"><span class="kpi-lbl">Active Alerts</span><span class="kpi-val c-yellow" id="k-alerts">—</span></div>
+  <div class="kpi"><span class="kpi-lbl">FIM Watching</span><span class="kpi-val c-teal" id="k-fim">—</span></div>
+  <div class="kpi"><span class="kpi-lbl">Events/5m</span><span class="kpi-val" id="k-rate">—</span></div>
+  <div class="kpi"><span class="kpi-lbl">MITRE Tactics</span><span class="kpi-val c-red" id="k-tactics">—</span></div>
+  <div id="conn-badge" class="off"><div class="conn-dot"></div><span id="conn-txt">OFFLINE</span></div>
+</header>
+
+<!-- TABBAR -->
+<nav id="tabbar">
+  <div class="tab active" data-tab="logs">Logs<span class="tbadge" id="tb-logs">0</span></div>
+  <div class="tab" data-tab="alerts">Alerts<span class="tbadge hot" id="tb-alerts">0</span></div>
+  <div class="tab" data-tab="network">Network<span class="tbadge" id="tb-net">0</span></div>
+  <div class="tab" data-tab="fim">File Integrity<span class="tbadge" id="tb-fim">0</span></div>
+  <div class="tab" data-tab="attack">MITRE ATT&amp;CK<span class="tbadge hot" id="tb-attack">0</span></div>
+</nav>
+
+<!-- WORKSPACE -->
+<div id="workspace">
+
+<!-- SIDEBAR -->
+<nav id="sidebar">
+  <div class="sb-sec">
+    <div class="sb-title">Severity</div>
+    <div id="lvl-filters"></div>
+  </div>
+  <div class="sb-sec">
+    <div class="sb-title">Filters</div>
+    <div class="filt"><label>Search</label><input type="text" id="f-search" placeholder="keyword…"></div>
+    <div class="filt"><label>Source</label><input type="text" id="f-source" placeholder="sshd, nginx…"></div>
+    <div class="filt"><label>Category</label>
+      <select id="f-cat">
+        <option value="">All</option><option value="log">Log</option>
+        <option value="network">Network</option><option value="portscan">Port Scan</option>
+        <option value="fim">File Integrity</option>
+      </select>
+    </div>
+    <div class="filt"><label>MITRE Tactic</label>
+      <select id="f-tactic">
+        <option value="">All Tactics</option>
+        <option>Reconnaissance</option><option>Initial Access</option>
+        <option>Execution</option><option>Persistence</option>
+        <option>Privilege Escalation</option><option>Defense Evasion</option>
+        <option>Credential Access</option><option>Discovery</option>
+        <option>Lateral Movement</option><option>Collection</option>
+        <option>Command and Control</option><option>Exfiltration</option>
+        <option>Impact</option>
+      </select>
+    </div>
+  </div>
+  <div class="sb-sec">
+    <div class="sb-title">View</div>
+    <div class="tog-row" id="tr-anomaly"><span class="tog-lbl">Anomalies only</span><div class="toggle" id="tog-anomaly"></div></div>
+    <div class="tog-row" id="tr-live"><span class="tog-lbl">Live tail</span><div class="toggle on" id="tog-live"></div></div>
+    <div class="tog-row" id="tr-wrap"><span class="tog-lbl">Wrap messages</span><div class="toggle" id="tog-wrap"></div></div>
+  </div>
+</nav>
+
+<!-- MAIN -->
+<main id="main">
+  <div id="toolbar">
+    <button class="btn" id="btn-pause">⏸ PAUSE</button>
+    <button class="btn" id="btn-clear">✕ CLEAR</button>
+    <button class="btn" id="btn-export">↓ EXPORT</button>
+    <input id="search" type="text" placeholder="Filter stream…">
+    <span class="rate-indicator" id="ingest-rate">0 ev/s</span>
+    <button class="btn" id="btn-refresh">↻ REFRESH</button>
+    <button class="btn" id="btn-retrain">⟳ RETRAIN ML</button>
+  </div>
+
+  <!-- LOGS -->
+  <div class="panel active" id="panel-logs">
+    <div id="log-stream"><div class="stream-empty">Waiting for log entries…</div></div>
+  </div>
+
+  <!-- ALERTS -->
+  <div class="panel" id="panel-alerts">
+    <div id="alerts-layout">
+      <div id="alerts-toolbar">
+        <input type="text" id="alerts-search" placeholder="Filter alerts…">
+        <select id="alerts-sev-filter">
+          <option value="">All Severities</option>
+          <option value="critical">Critical</option>
+          <option value="warning">Warning</option>
+          <option value="info">Info</option>
+        </select>
+        <button class="btn" id="btn-ack-all">✓ Acknowledge All</button>
+        <button class="btn" id="btn-reload-alerts">↻ Reload</button>
+        <span style="margin-left:auto;font-size:10px;color:var(--muted2)" id="alerts-count-label"></span>
+      </div>
+      <div id="alerts-stream"></div>
+    </div>
+  </div>
+
+  <!-- NETWORK -->
+  <div class="panel" id="panel-network">
+    <div id="net-layout">
+      <div class="net-top-row">
+        <div class="net-block">
+          <div class="block-hdr">Active Connections<span class="badge" id="conn-cnt" style="background:var(--border2);color:var(--text)">0</span></div>
+          <table class="data-table" id="conn-table">
+            <thead><tr><th>Local</th><th>Remote</th><th>Status</th><th>Process</th><th>Flag</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <div class="net-block">
+          <div class="block-hdr">Top Port Scanners<span class="badge" style="background:#2a0010;color:var(--red)" id="scanner-cnt">0</span></div>
+          <table class="data-table" id="scanner-table">
+            <thead><tr><th>Source IP</th><th>Events</th><th>MITRE</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+      <div id="net-events-stream">
+        <table class="data-table" style="font-size:10px">
+          <thead style="position:sticky;top:0;background:var(--surface);z-index:1">
+            <tr><th style="width:120px">Time</th><th>Level</th><th>Source/Dest</th><th>Port</th><th>Tactic</th><th>Message</th></tr>
+          </thead>
+          <tbody id="net-ev-body"></tbody>
+        </table>
+        <div class="ev-empty" id="net-empty">No network events recorded yet.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- FIM -->
+  <div class="panel" id="panel-fim">
+    <div id="fim-layout">
+      <div class="fim-top-row">
+        <div class="fim-block">
+          <div class="block-hdr">Event Summary</div>
+          <div class="stat-grid" id="fim-stat-grid"></div>
+        </div>
+        <div class="fim-block">
+          <div class="block-hdr">Baseline <span style="color:var(--muted2)" id="fim-baseline-cnt"></span></div>
+          <table class="data-table" id="fim-baseline-tbl" style="font-size:10px">
+            <thead><tr><th>File</th><th>Mode</th><th>Size</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+      <div id="fim-events-stream">
+        <table class="data-table" style="font-size:10px">
+          <thead style="position:sticky;top:0;background:var(--surface);z-index:1">
+            <tr><th style="width:120px">Time</th><th>Event</th><th>MITRE</th><th>File Path</th><th>Hash (new)</th><th>Message</th></tr>
+          </thead>
+          <tbody id="fim-ev-body"></tbody>
+        </table>
+        <div class="ev-empty" id="fim-empty">No FIM events recorded yet.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ATT&CK -->
+  <div class="panel" id="panel-attack">
+    <div id="attack-layout">
+      <div id="attack-toolbar">
+        <span style="font-size:10px;color:var(--muted2)">Timeframe</span>
+        <select id="attack-hours"><option value="1">1h</option><option value="6">6h</option><option value="24" selected>24h</option><option value="168">7d</option></select>
+        <button class="btn" id="btn-attack-reload">↻ RELOAD</button>
+        <div id="attack-summary">
+          <div>Techniques: <span id="atk-tech-cnt">0</span></div>
+          <div>Total hits: <span id="atk-hit-cnt">0</span></div>
+          <div>Top tactic: <span id="atk-top-tactic">—</span></div>
+        </div>
+      </div>
+      <div id="attack-body"></div>
+    </div>
+  </div>
+</main>
+
+<!-- RIGHT PANEL -->
+<aside id="right">
+  <div class="rp-block">
+    <div class="rp-hdr">Timeline<span style="color:var(--muted2);font-size:9px;font-weight:400;letter-spacing:0">last 60m</span></div>
+    <div id="chart-wrap"><canvas id="timeline-chart"></canvas></div>
+  </div>
+  <div class="rp-block">
+    <div class="rp-hdr">Level Distribution</div>
+    <div id="lv-bars"></div>
+  </div>
+  <div class="rp-block">
+    <div class="rp-hdr">Categories</div>
+    <div id="cat-breakdown"></div>
+  </div>
+  <div class="rp-block">
+    <div class="rp-hdr">Recent Alerts<span class="rp-hdr-cnt hot" id="rp-alert-cnt">0</span></div>
+    <div id="rp-alerts"></div>
+    <button class="view-all-btn" id="btn-view-alerts">View All Alerts →</button>
+  </div>
+  <div class="rp-block">
+    <div class="rp-hdr">ML Engine</div>
+    <div class="ml-row"><span class="k">Status</span><span class="v" id="ml-status">—</span></div>
+    <div class="ml-row"><span class="k">Buffer</span><span class="v" id="ml-buffer">0 / <span id="ml-train-size">800</span></span></div>
+    <div class="bar-track"><div class="bar-fill-ml" id="ml-prog" style="width:0"></div></div>
+    <div class="ml-row" style="margin-top:5px"><span class="k">Contamination</span><span class="v" id="ml-cont">5%</span></div>
+  </div>
+</aside>
+</div><!-- workspace -->
+</div><!-- shell -->
+
+<script>
+// ═══════════════════════════════════════════════════════
+// Constants
+// ═══════════════════════════════════════════════════════
+const LEVEL_CLR = {DEBUG:'#3d6080',INFO:'#00d4ff',WARNING:'#ffd740',ERROR:'#ff7043',CRITICAL:'#ff1744'};
+const TACTIC_CLR = {
+  'Reconnaissance':'#00bcd4','Resource Development':'#29b6f6','Initial Access':'#ff7043',
+  'Execution':'#ffa726','Persistence':'#ab47bc','Privilege Escalation':'#7e57c2',
+  'Defense Evasion':'#26a69a','Credential Access':'#ef5350','Discovery':'#42a5f5',
+  'Lateral Movement':'#00acc1','Collection':'#9ccc65','Command and Control':'#ff1744',
+  'Exfiltration':'#d500f9','Impact':'#f50057',
+};
+const TACTIC_ORDER = [
+  'Reconnaissance','Resource Development','Initial Access','Execution','Persistence',
+  'Privilege Escalation','Defense Evasion','Credential Access','Discovery',
+  'Lateral Movement','Collection','Command and Control','Exfiltration','Impact'
+];
+const TACTIC_IDS = {
+  'Reconnaissance':'TA0043','Resource Development':'TA0042','Initial Access':'TA0001',
+  'Execution':'TA0002','Persistence':'TA0003','Privilege Escalation':'TA0004',
+  'Defense Evasion':'TA0005','Credential Access':'TA0006','Discovery':'TA0007',
+  'Lateral Movement':'TA0008','Collection':'TA0009','Command and Control':'TA0011',
+  'Exfiltration':'TA0010','Impact':'TA0040',
+};
+const CAT_CLR = {log:'#00d4ff',network:'#ffd740',portscan:'#ff1744',fim:'#1de9b6'};
+const MAX_DOM_ROWS  = 600;   // max rows in log-stream DOM
+const MAX_MEMORY    = 5000;  // max entries in memory ring-buffer
+const STATS_DEFERRED_MS = 2000; // debounce stat bar re-renders
+
+// ═══════════════════════════════════════════════════════
+// State
+// ═══════════════════════════════════════════════════════
+const S = {
+  live: true, paused: false, anomalyOnly: false, wrapMsgs: false,
+  levelFilter: null, sourceFilter:'', searchFilter:'', catFilter:'', tacticFilter:'',
+  levels: {DEBUG:0,INFO:0,WARNING:0,ERROR:0,CRITICAL:0},
+  ring: [],          // in-memory ring buffer of LogEntry dicts
+  alertsData: [],    // cached alert list
+  alertFilter: '',   // search in alerts tab
+  alertSevFilter: '',
+  currentTab: 'logs',
+  ingestCount: 0,    // events in last second (for rate display)
+  statsDirty: false, // schedule bar re-render
+  statsTimer: null,
+};
+
+// ═══════════════════════════════════════════════════════
+// WebSocket
+// ═══════════════════════════════════════════════════════
+const socket = io('/logs', {transports:['websocket','polling'], reconnectionDelay:2000});
+
+socket.on('connect', () => {
+  setBadge(true);
+  loadAll();
+});
+socket.on('disconnect', () => setBadge(false));
+
+// Batched log events
+socket.on('log_batch', batch => {
+  if (!Array.isArray(batch)) return;
+  S.ingestCount += batch.length;
+  for (const e of batch) {
+    addToRing(e);
+    countLevel(e.level, 1);
+    bumpBadge('logs');
+  }
+  if (S.live && !S.paused) schedFlush(batch);
+  schedStats();
+});
+
+socket.on('net_batch', batch => {
+  if (!Array.isArray(batch)) return;
+  bumpBadge('net', batch.length);
+  if (S.currentTab === 'network') batch.forEach(e => prependNetRow(e));
+  for (const e of batch) addToRing(e);
+});
+
+socket.on('fim_batch', batch => {
+  if (!Array.isArray(batch)) return;
+  bumpBadge('fim', batch.length);
+  if (S.currentTab === 'fim') batch.forEach(e => prependFimRow(e));
+  for (const e of batch) addToRing(e);
+});
+
+socket.on('alert', a => {
+  S.alertsData.unshift(a);
+  if (S.alertsData.length > 500) S.alertsData.length = 500;
+  bumpBadge('alerts');
+  renderRPAlerts();
+  if (S.currentTab === 'alerts') renderAlertsTab();
+  updateAlertKPI();
+});
+
+socket.on('alert_acked', ({id}) => {
+  const a = S.alertsData.find(x => x.id === id);
+  if (a) a.acknowledged = 1;
+  if (S.currentTab === 'alerts') renderAlertsTab();
+});
+
+socket.on('alerts_cleared', () => {
+  S.alertsData.forEach(a => a.acknowledged = 1);
+  if (S.currentTab === 'alerts') renderAlertsTab();
+  document.getElementById('rp-alert-cnt').textContent = '0';
+});
+
+socket.on('stats_update', s => {
+  setKPI('k-total', fmt(s.total), 'c-accent');
+  setKPI('k-anom', fmt(s.anomalies), 'c-red');
+  updateAlertKPI();
+});
+
+function setBadge(ok) {
+  const b = document.getElementById('conn-badge');
+  b.className = ok ? 'live' : 'off';
+  document.getElementById('conn-txt').textContent = ok ? 'LIVE' : 'OFFLINE';
+}
+
+// ═══════════════════════════════════════════════════════
+// Ring buffer (in-memory, capped)
+// ═══════════════════════════════════════════════════════
+function addToRing(e) {
+  S.ring.unshift(e);
+  if (S.ring.length > MAX_MEMORY) S.ring.length = MAX_MEMORY;
+}
+
+// ═══════════════════════════════════════════════════════
+// Log stream – batched flush
+// ═══════════════════════════════════════════════════════
+let _pendingBatch = [];
+let _flushRaf = null;
+function schedFlush(batch) {
+  _pendingBatch.push(...batch);
+  if (!_flushRaf) _flushRaf = requestAnimationFrame(doFlush);
+}
+function doFlush() {
+  _flushRaf = null;
+  if (!_pendingBatch.length) return;
+  const items = _pendingBatch.splice(0, 200); // process max 200 per frame
+  if (_pendingBatch.length) _flushRaf = requestAnimationFrame(doFlush);
+
+  const stream = document.getElementById('log-stream');
+  const empty = stream.querySelector('.stream-empty');
+  if (empty) empty.remove();
+
+  const frag = document.createDocumentFragment();
+  let added = 0;
+  for (const e of items) {
+    if (!passesFilters(e)) continue;
+    frag.prepend(makeLogRow(e, true));
+    added++;
+  }
+  if (added) {
+    stream.prepend(frag);
+    trimStream(stream);
+  }
+}
+
+function trimStream(stream) {
+  const rows = stream.querySelectorAll('.log-row');
+  const excess = rows.length - MAX_DOM_ROWS;
+  if (excess > 0) {
+    for (let i = rows.length - 1; i >= MAX_DOM_ROWS; i--) rows[i].remove();
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+// Filters
+// ═══════════════════════════════════════════════════════
+function passesFilters(e) {
+  if (S.levelFilter  && e.level !== S.levelFilter) return false;
+  if (S.anomalyOnly  && !e.is_anomaly) return false;
+  if (S.sourceFilter && !e.source.toLowerCase().includes(S.sourceFilter.toLowerCase())) return false;
+  if (S.searchFilter && !e.message.toLowerCase().includes(S.searchFilter.toLowerCase())) return false;
+  if (S.catFilter    && e.category !== S.catFilter) return false;
+  if (S.tacticFilter && e.mitre_tactic !== S.tacticFilter) return false;
+  return true;
+}
+
+// ═══════════════════════════════════════════════════════
+// Log row builder
+// ═══════════════════════════════════════════════════════
+function makeLogRow(e, isNew) {
+  const tc = e.mitre_tactic ? (TACTIC_CLR[e.mitre_tactic] || '#555') : 'transparent';
+  const hasMitre = !!e.mitre_tactic;
+
+  const row = document.createElement('div');
+  row.className = 'log-row' + (e.is_anomaly?' anomaly':'') + (hasMitre?' has-mitre':'') + (isNew?' new':'');
+  row.dataset.id = e.id;
+
+  const ts = (e.timestamp||'').slice(0,19).replace('T',' ');
+  const mitreTitle = hasMitre ? `${e.mitre_tactic} / ${e.mitre_technique_id}` : '';
+  const mitreGlow = hasMitre ? `box-shadow:0 0 5px ${tc}` : '';
+
+  // Build tags for anomaly/rules/mitre
+  let tagHtml = '';
+  if (e.is_anomaly) tagHtml += `<span class="r-tag anomaly">ANOMALY ${e.anomaly_score?.toFixed(2)||''}</span>`;
+  (e.matched_rules||[]).slice(0,2).forEach(r => tagHtml += `<span class="r-tag rule">${esc(r)}</span>`);
+  if (hasMitre) tagHtml += `<span class="r-tag mitre" style="color:${tc};border-color:${tc}44;background:${tc}12">${esc(e.mitre_technique_id)}</span>`;
+
+  const hasTags = tagHtml.length > 0;
+  const msgClass = S.wrapMsgs ? 'r-msg wrap' : 'r-msg';
+
+  row.innerHTML = `
+    <span class="r-ts">${ts}</span>
+    <span class="r-lvl lvl-${e.level||'INFO'}">${e.level||'INFO'}</span>
+    <span class="r-mitre" style="background:${tc};${mitreGlow}" title="${esc(mitreTitle)}"></span>
+    <div class="r-main">
+      <div class="r-src">${esc(e.source||'')}${e.category&&e.category!=='log'?` <span style="color:var(--muted2)">[${e.category}]</span>`:''}
+        ${e.src_ip?`<span style="color:var(--muted2);font-size:9px"> ${esc(e.src_ip)}→${esc(e.dst_ip||'')}${e.dst_port?':'+e.dst_port:''}</span>`:''}
+        ${e.filepath?`<span style="color:var(--muted2);font-size:9px"> ${esc(e.filepath.split('/').pop())}</span>`:''}
+      </div>
+      <div class="${msgClass}">${esc(e.message||'')}</div>
+      ${hasTags?`<div class="r-tags">${tagHtml}</div>`:''}
+    </div>`;
+
+  row.addEventListener('click', () => toggleRowDetail(row, e));
+  return row;
+}
+
+// ─── Inline row detail ───────────────────────────────
+function toggleRowDetail(row, e) {
+  // Remove other open details
+  document.querySelectorAll('.row-detail.open').forEach(d => {
+    if (d.previousElementSibling !== row) d.classList.remove('open');
+  });
+
+  let detail = row.nextElementSibling;
+  if (!detail || !detail.classList.contains('row-detail')) {
+    detail = buildRowDetail(e);
+    row.insertAdjacentElement('afterend', detail);
+  }
+  const isOpen = detail.classList.toggle('open');
+  row.classList.toggle('expanded', isOpen);
+}
+
+function buildRowDetail(e) {
+  const detail = document.createElement('div');
+  detail.className = 'row-detail';
+  const tc = e.mitre_tactic ? (TACTIC_CLR[e.mitre_tactic]||'#555') : '';
+  const mitreHtml = e.mitre_tactic ? `
+    <span class="mitre-chip" style="color:${tc};border-color:${tc}44;background:${tc}12">
+      ${esc(e.mitre_tactic_id)} ${esc(e.mitre_tactic)}
+    </span>
+    <span class="mitre-chip" style="color:${tc};border-color:${tc}33;background:${tc}0a">
+      ${esc(e.mitre_technique_id||'')}${e.mitre_subtechnique_id?` › ${esc(e.mitre_subtechnique_id)}`:''} — ${esc(e.mitre_technique||'')}
+    </span>` : '<span style="color:var(--muted2)">No MITRE classification</span>';
+
+  detail.innerHTML = `
+    <div class="rd-col">
+      <h5>Event</h5>
+      ${rf('ID', e.id)}${rf('Time', e.timestamp)}${rf('Source', e.source)}
+      ${rf('Level', e.level)}${rf('Platform', e.platform)}${rf('Category', e.category||'log')}
+      ${e.src_ip ? rf('Src IP', e.src_ip) : ''}
+      ${e.dst_ip ? rf('Dst', e.dst_ip + (e.dst_port ? ':'+e.dst_port : '') + (e.protocol?' ('+e.protocol+')':'')) : ''}
+      ${e.filepath ? rf('File', e.filepath) : ''}
+      ${e.file_hash ? rf('Hash', e.file_hash.slice(0,32)+'…') : ''}
+      ${e.is_anomaly ? rf('Anomaly Score', e.anomaly_score?.toFixed(4)||'') : ''}
+    </div>
+    <div class="rd-col">
+      <h5>Detection</h5>
+      <div style="margin-bottom:8px">${mitreHtml}</div>
+      ${(e.matched_rules||[]).length ? rf('Rules', (e.matched_rules||[]).map(r=>`<span class="r-tag rule">${esc(r)}</span>`).join(' ')) : ''}
+      ${(e.tags||[]).length ? rf('Tags', esc((e.tags||[]).join(', '))) : ''}
+    </div>
+    <div class="rd-raw">${esc(e.raw||e.message||'')}</div>`;
+  return detail;
+}
+
+function rf(k, v) {
+  return `<div class="rd-field"><span class="rd-k">${k}</span><span class="rd-v">${v}</span></div>`;
+}
+
+// ═══════════════════════════════════════════════════════
+// ALERTS TAB
+// ═══════════════════════════════════════════════════════
+async function loadAlertsTab() {
+  try {
+    const data = await fetchJson('/api/alerts/history?limit=300');
+    S.alertsData = data;
+    renderAlertsTab();
+  } catch(e) { console.error(e); }
+}
+
+function renderAlertsTab() {
+  const stream = document.getElementById('alerts-stream');
+  const q = S.alertFilter.toLowerCase();
+  const sv = S.alertSevFilter;
+
+  const filtered = S.alertsData.filter(a => {
+    if (sv && a.level !== sv) return false;
+    if (q && !a.rule_name?.toLowerCase().includes(q) &&
+              !a.message?.toLowerCase().includes(q) &&
+              !a.source?.toLowerCase().includes(q)) return false;
+    return true;
+  });
+
+  document.getElementById('alerts-count-label').textContent = `${filtered.length} alert${filtered.length!==1?'s':''}`;
+
+  if (!filtered.length) {
+    stream.innerHTML = '<div class="alerts-empty"><div class="icon">🛡</div><div>No alerts match your filters.</div></div>';
+    return;
+  }
+
+  stream.innerHTML = '';
+  filtered.slice(0, 200).forEach(a => stream.appendChild(buildAlertCard(a)));
+}
+
+function buildAlertCard(a) {
+  const card = document.createElement('div');
+  const lvl  = (a.level || 'info').toLowerCase();
+  const tc   = a.mitre_tactic ? (TACTIC_CLR[a.mitre_tactic] || '#607080') : '';
+  const sevClr = lvl==='critical'?'var(--red)' : lvl==='warning'?'var(--orange)' : 'var(--accent)';
+  const ts   = new Date(a.timestamp).toLocaleString('en-GB',
+                 {day:'2-digit',month:'2-digit',year:'2-digit',
+                  hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});
+
+  card.className = `alert-card ${lvl}${a.acknowledged ? ' acked' : ''}`;
+  card.dataset.id = String(a.id || '');
+
+  /* ── header ── */
+  const hdr = document.createElement('div');
+  hdr.className = 'ac-header';
+  hdr.style.borderLeftColor = sevClr;
+
+  // left side: badge + rule + source
+  const left = document.createElement('div');
+  left.className = 'ac-header-left';
+  left.innerHTML =
+    `<span class="ac-badge ${lvl}">${lvl.toUpperCase()}</span>` +
+    `<span class="ac-rule" title="${esc(a.rule_name||a.rule||'')}">${esc(a.rule_name||a.rule||'Unknown Rule')}</span>`;
+
+  const src = document.createElement('span');
+  src.className = 'ac-source';
+  src.title = a.source || '';
+  src.textContent = a.source || '';
+
+  const time = document.createElement('span');
+  time.className = 'ac-time';
+  time.textContent = ts;
+
+  const chev = document.createElement('span');
+  chev.className = 'ac-chevron';
+  chev.textContent = '›';
+
+  hdr.appendChild(left);
+  hdr.appendChild(src);
+  hdr.appendChild(time);
+
+  // ack button (before chevron so click doesn't toggle)
+  if (!a.acknowledged) {
+    const ackBtn = document.createElement('button');
+    ackBtn.className = 'ac-ack-btn';
+    ackBtn.textContent = '✓ ACK';
+    ackBtn.dataset.id = String(a.id || '');
+    ackBtn.addEventListener('click', async e => {
+      e.stopPropagation();
+      if (a.id) await fetch(`/api/alerts/${a.id}/acknowledge`, {method:'POST'});
+      card.classList.add('acked');
+      ackBtn.remove();
+      const found = S.alertsData.find(x => x.id === a.id);
+      if (found) found.acknowledged = 1;
+      updateAlertKPI();
+    });
+    hdr.appendChild(ackBtn);
+  }
+  hdr.appendChild(chev);
+  card.appendChild(hdr);
+
+  /* ── body (lazy-built on first open) ── */
+  const body = document.createElement('div');
+  body.className = 'ac-body';
+  let bodyBuilt = false;
+
+  function buildBody() {
+    if (bodyBuilt) return;
+    bodyBuilt = true;
+
+    // ── two-column detail grid ──
+    const grid = document.createElement('div');
+    grid.className = 'ac-detail-grid';
+
+    // Column 1: Event metadata
+    const col1 = document.createElement('div');
+    col1.className = 'ac-detail-col';
+    col1.innerHTML = '<h5>Event</h5>';
+    const evFields = [
+      ['ID',       a.log_id || a.id || '—'],
+      ['Time',     a.timestamp || '—'],
+      ['Source',   a.source || '—'],
+      ['Category', a.category || 'log'],
+      ['Level',    `<span class="r-lvl lvl-${(a.level||'INFO').toUpperCase()}">${esc(a.level||'INFO')}</span>`],
+      ...(a.src_ip  ? [['Src IP',   a.src_ip]] : []),
+      ...(a.dst_ip  ? [['Dst',      `${a.dst_ip}${a.dst_port?':'+a.dst_port:''}`]] : []),
+      ...(a.filepath? [['File',     a.filepath]] : []),
+      ...(a.is_anomaly ? [['Anomaly', `<span style="color:var(--purple)">${(a.anomaly_score||0).toFixed(4)}</span>`]] : []),
+    ];
+    evFields.forEach(([k,v]) => {
+      const row = document.createElement('div');
+      row.className = 'ac-row';
+      row.innerHTML = `<span class="ac-k">${k}</span><span class="ac-v">${typeof v === 'string' && v.includes('<') ? v : esc(String(v))}</span>`;
+      col1.appendChild(row);
+    });
+
+    // Column 2: Detection / MITRE
+    const col2 = document.createElement('div');
+    col2.className = 'ac-detail-col';
+    col2.innerHTML = '<h5>Detection</h5>';
+
+    // Matched rules
+    const rules = a.matched_rules || (a.rule_name ? [a.rule_name] : []);
+    if (rules.length) {
+      const rrow = document.createElement('div');
+      rrow.className = 'ac-row';
+      rrow.innerHTML = `<span class="ac-k">Rules</span><span class="ac-v">${rules.map(r=>`<span class="r-tag rule">${esc(r)}</span>`).join(' ')}</span>`;
+      col2.appendChild(rrow);
+    }
+
+    // MITRE block
+    if (a.mitre_tactic) {
+      const mb = document.createElement('div');
+      mb.className = 'ac-mitre-block';
+
+      const tacticRow = document.createElement('div');
+      tacticRow.className = 'mb-row';
+      tacticRow.innerHTML =
+        `<span class="mb-label">Tactic</span>` +
+        `<span class="mitre-chip" style="color:${tc};border-color:${tc}55;background:${tc}15">` +
+          `${esc(a.mitre_tactic_id||'')} · ${esc(a.mitre_tactic||'')}` +
+        `</span>`;
+      mb.appendChild(tacticRow);
+
+      if (a.mitre_technique_id) {
+        const techRow = document.createElement('div');
+        techRow.className = 'mb-row';
+        const subId = a.mitre_sub_id || a.mitre_subtechnique_id || '';
+        techRow.innerHTML =
+          `<span class="mb-label">Technique</span>` +
+          `<span class="mitre-chip" style="color:${tc};border-color:${tc}44;background:${tc}10">` +
+            `${esc(subId || a.mitre_technique_id)}` +
+          `</span>` +
+          `<span style="font-size:10px;color:${tc};opacity:.85">${esc((a.mitre_technique||'').split(':')[0])}</span>`;
+        mb.appendChild(techRow);
+        if (subId && a.mitre_technique_id !== subId) {
+          const baseRow = document.createElement('div');
+          baseRow.className = 'mb-row';
+          baseRow.innerHTML = `<span class="mb-label">Base</span><span style="font-size:10px;color:var(--muted2)">${esc(a.mitre_technique_id)}</span>`;
+          mb.appendChild(baseRow);
+        }
+      }
+      col2.appendChild(mb);
+
+      // Technique description
+      if (a.tech_description) {
+        const desc = document.createElement('div');
+        desc.className = 'ac-tech-desc';
+        desc.textContent = a.tech_description;
+        col2.appendChild(desc);
+      }
+    } else {
+      const nr = document.createElement('div');
+      nr.className = 'ac-row';
+      nr.innerHTML = `<span class="ac-k">MITRE</span><span class="ac-v" style="color:var(--muted2)">No classification</span>`;
+      col2.appendChild(nr);
+    }
+
+    grid.appendChild(col1);
+    grid.appendChild(col2);
+    body.appendChild(grid);
+
+    // Log excerpt (full width)
+    if (a.message) {
+      const ex = document.createElement('div');
+      ex.className = 'ac-excerpt';
+      ex.innerHTML =
+        `<div class="ac-excerpt-label">Log Message</div>` +
+        `<div class="ac-excerpt-body">${esc(a.message)}</div>`;
+      body.appendChild(ex);
+    }
+  }
+
+  card.appendChild(body);
+
+  /* ── toggle expand ── */
+  hdr.addEventListener('click', e => {
+    if (e.target.classList.contains('ac-ack-btn')) return;
+    buildBody();  // lazy render
+    const willOpen = !card.classList.contains('open');
+    // Close others first
+    document.querySelectorAll('.alert-card.open').forEach(c => {
+      if (c !== card) c.classList.remove('open');
+    });
+    card.classList.toggle('open', willOpen);
+    // Scroll expanded card into view after transition
+    if (willOpen) {
+      setTimeout(() => card.scrollIntoView({behavior:'smooth', block:'nearest'}), 50);
+    }
+  });
+
+  return card;
+}
+
+function updateAlertKPI() {
+  const unacked = S.alertsData.filter(a => !a.acknowledged).length;
+  document.getElementById('rp-alert-cnt').textContent = unacked;
+  setKPI('k-alerts', unacked.toString(), unacked>0?'c-yellow':'c-muted');
+  document.getElementById('tb-alerts').textContent = unacked > 99 ? '99+' : unacked;
+}
+
+// Right-panel compact alerts
+function renderRPAlerts() {
+  const container = document.getElementById('rp-alerts');
+  container.innerHTML = '';
+  const recent = S.alertsData.filter(a => !a.acknowledged).slice(0, 8);
+  if (!recent.length) {
+    container.innerHTML = '<div style="color:var(--muted2);font-size:10px;padding:4px 0">No active alerts</div>';
+    return;
+  }
+  recent.forEach(a => {
+    const tc = a.mitre_tactic ? (TACTIC_CLR[a.mitre_tactic]||'#555') : 'var(--muted2)';
+    const lvl = (a.level||'info').toLowerCase();
+    const sev_clr = lvl==='critical'?'var(--red)':lvl==='warning'?'var(--orange)':'var(--accent)';
+    const el = document.createElement('div');
+    el.className = 'ra-item';
+    el.innerHTML = `
+      <div class="ra-row1">
+        <div class="ra-sev" style="background:${sev_clr}"></div>
+        <div class="ra-rule">${esc(a.rule_name||a.rule||'Alert')}</div>
+        <div class="ra-time">${new Date(a.timestamp).toLocaleTimeString('en-GB',{hour12:false})}</div>
+      </div>
+      <div class="ra-src">${esc(a.source||'')}</div>
+      ${a.mitre_tactic?`<div class="ra-mitre" style="color:${tc}">${esc(a.mitre_tactic_id||'')} · ${esc(a.mitre_technique_id||'')} ${esc(a.mitre_technique?.split(':')[0]||'')}</div>`:''}`;
+    el.addEventListener('click', () => {
+      document.querySelector('[data-tab="alerts"]').click();
+    });
+    container.appendChild(el);
+  });
+}
+
+// ═══════════════════════════════════════════════════════
+// NETWORK TAB
+// ═══════════════════════════════════════════════════════
+async function loadNetworkTab() {
+  try {
+    const [conns, events, scanners] = await Promise.all([
+      fetchJson('/api/network/connections'),
+      fetchJson('/api/network/events?limit=300'),
+      fetchJson('/api/network/scanners'),
+    ]);
+    renderConnTable(conns);
+    renderScannerTable(scanners);
+    renderNetEventsTable(events);
+    const ne = document.getElementById('net-empty');
+    if (ne) ne.style.display = events.length ? 'none' : 'block';
+  } catch(e) { console.error(e); }
+}
+
+function renderConnTable(conns) {
+  const tbody = document.querySelector('#conn-table tbody');
+  document.getElementById('conn-cnt').textContent = conns.length;
+  tbody.innerHTML = conns.slice(0,30).map(c => `
+    <tr class="${c.suspicious?'suspicious':c.external?'warning-row':''}">
+      <td class="mono">${esc(c.laddr||'—')}</td>
+      <td class="ip-cell">${esc(c.raddr||'—')}</td>
+      <td style="color:var(--muted2)">${esc(c.status||'')}</td>
+      <td class="proc-cell">${esc(c.proc||'?')}</td>
+      <td>${c.suspicious?'<span style="color:var(--red)">⚠ SUSP</span>':c.external?'<span style="color:var(--yellow)">EXT</span>':''}</td>
+    </tr>`).join('');
+}
+
+function renderScannerTable(scanners) {
+  const tbody = document.querySelector('#scanner-table tbody');
+  document.getElementById('scanner-cnt').textContent = scanners.length;
+  tbody.innerHTML = scanners.length ? scanners.map(s => `
+    <tr>
+      <td class="ip-cell">${esc(s.ip||'')}</td>
+      <td style="color:var(--red);font-weight:500">${s.count||0}</td>
+      <td style="color:var(--accent2);font-size:9px">T1046</td>
+    </tr>`).join('') : '<tr><td colspan="3" style="color:var(--muted2);padding:8px">None detected</td></tr>';
+}
+
+function renderNetEventsTable(events) {
+  const tbody = document.getElementById('net-ev-body');
+  tbody.innerHTML = '';
+  events.forEach(e => tbody.appendChild(buildNetTableRow(e)));
+}
+
+function buildNetTableRow(e) {
+  const tr = document.createElement('tr');
+  tr.className = e.level==='CRITICAL'||e.level==='ERROR' ? 'suspicious' : e.level==='WARNING'?'warning-row':'';
+  const tc = e.mitre_tactic?(TACTIC_CLR[e.mitre_tactic]||'#555'):'var(--muted2)';
+  tr.innerHTML = `
+    <td class="r-ts" style="font-size:9px">${(e.timestamp||'').slice(0,19).replace('T',' ')}</td>
+    <td><span class="r-lvl lvl-${e.level||'INFO'}">${e.level||'INFO'}</span></td>
+    <td class="ip-cell">${esc(e.src_ip||'')}${e.dst_ip?'→'+esc(e.dst_ip):''}</td>
+    <td class="port-cell">${e.dst_port||''}</td>
+    <td><span style="color:${tc};font-size:9px" title="${esc(e.mitre_technique||'')}">${esc(e.mitre_technique_id||'')}</span></td>
+    <td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(e.message||'')}">${esc(e.message||'')}</td>`;
+  tr.addEventListener('click', () => {
+    document.querySelectorAll('.net-ev-detail').forEach(d => d.classList.remove('open'));
+    let detail = tr.nextElementSibling?.querySelector?.('.net-ev-detail') ||
+                 tr.nextElementSibling;
+    if (!detail || !detail.classList?.contains?.('net-ev-detail')) {
+      const detRow = document.createElement('tr');
+      const detTd = document.createElement('td');
+      detTd.colSpan = 6;
+      const div = document.createElement('div');
+      div.className = 'net-ev-detail open';
+      div.innerHTML = buildNetDetailHtml(e);
+      detTd.appendChild(div);
+      detRow.appendChild(detTd);
+      tr.insertAdjacentElement('afterend', detRow);
+    } else {
+      detail.classList.toggle('open');
+    }
+  });
+  return tr;
+}
+
+function prependNetRow(e) {
+  const tbody = document.getElementById('net-ev-body');
+  if (tbody) {
+    tbody.prepend(buildNetTableRow(e));
+    const ne = document.getElementById('net-empty');
+    if (ne) ne.style.display = 'none';
+    while (tbody.children.length > 300) tbody.removeChild(tbody.lastChild);
+  }
+}
+
+function buildNetDetailHtml(e) {
+  const tc = e.mitre_tactic?(TACTIC_CLR[e.mitre_tactic]||'#555'):'';
+  return `
+    <div>
+      ${rf('Source', e.src_ip||'—')}${rf('Destination', (e.dst_ip||'—')+(e.dst_port?':'+e.dst_port:''))}
+      ${rf('Protocol', e.protocol||'TCP')}${rf('Category', e.category||'network')}
+      ${rf('Rules', (e.matched_rules||[]).map(r=>`<span class="r-tag rule">${esc(r)}</span>`).join(' ')||'—')}
+    </div>
+    <div>
+      ${e.mitre_tactic?`<div class="rd-field"><span class="rd-k">MITRE</span><span class="rd-v"><span class="mitre-chip" style="color:${tc};border-color:${tc}44;background:${tc}12">${esc(e.mitre_tactic_id)} ${esc(e.mitre_tactic)}</span> <span class="mitre-chip" style="color:${tc};border-color:${tc}33;background:${tc}0a">${esc(e.mitre_technique_id)} ${esc(e.mitre_technique?.split(':')[0]||'')}</span></span></div>`:''}
+      ${rf('Anomaly Score', e.is_anomaly?(e.anomaly_score?.toFixed(3)||'0'):'None')}
+      ${rf('Message', e.message||'')}
+    </div>`;
+}
+
+// ═══════════════════════════════════════════════════════
+// FIM TAB
+// ═══════════════════════════════════════════════════════
+async function loadFimTab() {
+  try {
+    const [events, baseline] = await Promise.all([
+      fetchJson('/api/fim/events?limit=200'),
+      fetchJson('/api/fim/baseline'),
+    ]);
+    renderFimStats(events);
+    renderFimBaseline(baseline);
+    renderFimEventsTable(events);
+    const fe = document.getElementById('fim-empty');
+    if (fe) fe.style.display = events.length ? 'none' : 'block';
+  } catch(e) { console.error(e); }
+}
+
+function renderFimStats(events) {
+  const counts = {MODIFIED:0,DELETED:0,CREATED:0,PERMISSION_CHANGED:0};
+  events.forEach(e => {
+    const ev = e.message.includes('MODIFIED')?'MODIFIED':e.message.includes('DELETED')?'DELETED':e.message.includes('CREATED')?'CREATED':'PERMISSION_CHANGED';
+    counts[ev]++;
+  });
+  const total = events.length;
+  const clrs = {MODIFIED:'var(--red)',DELETED:'var(--red)',CREATED:'var(--teal)',PERMISSION_CHANGED:'var(--yellow)'};
+  document.getElementById('fim-stat-grid').innerHTML = Object.entries(counts).map(([k,v]) => `
+    <div class="stat-card">
+      <div class="sc-val" style="color:${clrs[k]}">${v}</div>
+      <div class="sc-lbl">${k.replace('_',' ')}</div>
+    </div>`).join('');
+}
+
+function renderFimBaseline(baseline) {
+  document.getElementById('fim-baseline-cnt').textContent = `(${baseline.length} files)`;
+  const tbody = document.querySelector('#fim-baseline-tbl tbody');
+  tbody.innerHTML = baseline.slice(0,20).map(f => `
+    <tr>
+      <td class="ip-cell" title="${esc(f.path)}">${esc(f.path.split('/').pop()||f.path)}</td>
+      <td style="color:var(--muted2)">${esc(f.mode||'')}</td>
+      <td style="color:var(--muted2)">${f.size>=1024?(f.size/1024).toFixed(1)+'K':f.size+'B'}</td>
+    </tr>`).join('');
+}
+
+function renderFimEventsTable(events) {
+  const tbody = document.getElementById('fim-ev-body');
+  tbody.innerHTML = '';
+  events.forEach(e => tbody.appendChild(buildFimTableRow(e)));
+}
+
+function buildFimTableRow(e) {
+  const tr = document.createElement('tr');
+  tr.className = e.level==='CRITICAL'?'suspicious':'warning-row';
+  const ev = e.message.includes('MODIFIED')?'MODIFIED':e.message.includes('DELETED')?'DELETED':e.message.includes('CREATED')?'CREATED':'PERMISSION_CHANGED';
+  const tc = e.mitre_tactic?(TACTIC_CLR[e.mitre_tactic]||'#555'):'var(--muted2)';
+  tr.innerHTML = `
+    <td class="r-ts" style="font-size:9px">${(e.timestamp||'').slice(0,19).replace('T',' ')}</td>
+    <td><span class="fim-badge fim-${ev}">${ev.replace('_',' ')}</span></td>
+    <td><span style="color:${tc};font-size:9px" title="${esc(e.mitre_technique||'')}">${esc(e.mitre_technique_id||'')}</span></td>
+    <td class="ip-cell" style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(e.filepath||'')}">${esc(e.filepath||'')}</td>
+    <td style="color:var(--muted2);font-size:9px">${esc((e.file_hash||'').slice(0,14))}${e.file_hash?.length>14?'…':''}</td>
+    <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px;color:var(--text)" title="${esc(e.message||'')}">${esc(e.message?.replace(/FIM \[.*?\] /,'')||'')}</td>`;
+  tr.addEventListener('click', () => {
+    document.querySelectorAll('.fim-ev-detail').forEach(d => d.classList.remove('open'));
+    let detRow = tr.nextElementSibling;
+    if (!detRow?.querySelector?.('.fim-ev-detail')) {
+      detRow = document.createElement('tr');
+      const td = document.createElement('td'); td.colSpan = 6;
+      const div = document.createElement('div'); div.className = 'fim-ev-detail open';
+      div.innerHTML = buildFimDetailHtml(e);
+      td.appendChild(div); detRow.appendChild(td);
+      tr.insertAdjacentElement('afterend', detRow);
+    } else {
+      detRow.querySelector('.fim-ev-detail').classList.toggle('open');
+    }
+  });
+  return tr;
+}
+
+function prependFimRow(e) {
+  const tbody = document.getElementById('fim-ev-body');
+  if (tbody) {
+    tbody.prepend(buildFimTableRow(e));
+    const fe = document.getElementById('fim-empty');
+    if (fe) fe.style.display = 'none';
+    while (tbody.children.length > 200) tbody.removeChild(tbody.lastChild);
+  }
+}
+
+function buildFimDetailHtml(e) {
+  const tc = e.mitre_tactic?(TACTIC_CLR[e.mitre_tactic]||'#555'):'';
+  return `
+    <span class="rd-k">Path</span><span class="rd-v">${esc(e.filepath||'—')}</span>
+    <span class="rd-k">New Hash</span><span class="rd-v" style="font-size:10px;word-break:break-all">${esc(e.file_hash||'—')}</span>
+    <span class="rd-k">Level</span><span class="rd-v"><span class="r-lvl lvl-${e.level||'INFO'}">${e.level||'INFO'}</span></span>
+    <span class="rd-k">MITRE</span><span class="rd-v">${e.mitre_tactic?`<span class="mitre-chip" style="color:${tc};border-color:${tc}44;background:${tc}12">${esc(e.mitre_tactic_id)} ${esc(e.mitre_tactic)}</span> <span class="mitre-chip" style="color:${tc};border-color:${tc}33;background:${tc}0a">${esc(e.mitre_technique_id)} ${esc(e.mitre_technique?.split(':')[0]||'')}</span>`:'—'}</span>
+    <span class="rd-k">Full Message</span><span class="rd-v" style="grid-column:1/-1;color:var(--muted2)">${esc(e.message||'')}</span>`;
+}
+
+// ═══════════════════════════════════════════════════════
+// ATT&CK HEATMAP
+// ═══════════════════════════════════════════════════════
+async function loadAttackTab() {
+  try {
+    const hours = document.getElementById('attack-hours').value || 24;
+    const data  = await fetchJson(`/api/mitre/heatmap?hours=${hours}`);
+    renderHeatmap(data);
+  } catch(e) { console.error(e); }
+}
+
+function renderHeatmap(data) {
+  const body = document.getElementById('attack-body');
+  body.innerHTML = '';
+  bumpBadge('attack', data.length, true);
+
+  // Group techniques by tactic
+  const byTactic = {};
+  for (const t of TACTIC_ORDER) byTactic[t] = [];
+  for (const item of data) {
+    const t = item.mitre_tactic || 'Unknown';
+    if (!byTactic[t]) byTactic[t] = [];
+    byTactic[t].push(item);
+  }
+
+  // Summary stats
+  const totalHits = data.reduce((s,d) => s+d.cnt, 0);
+  const techCount = data.length;
+  let topTactic = '—', topCount = 0;
+  for (const [t, techs] of Object.entries(byTactic)) {
+    const sum = techs.reduce((s,d) => s+d.cnt, 0);
+    if (sum > topCount) { topCount = sum; topTactic = t; }
+  }
+  document.getElementById('atk-tech-cnt').textContent = techCount;
+  document.getElementById('atk-hit-cnt').textContent  = totalHits;
+  document.getElementById('atk-top-tactic').textContent = topTactic;
+  const topTacticEl = document.getElementById('atk-top-tactic');
+  if (topTactic !== '—') topTacticEl.style.color = TACTIC_CLR[topTactic]||'var(--text)';
+
+  const maxCnt = Math.max(...data.map(d=>d.cnt), 1);
+  const maxTacticCnt = Math.max(...TACTIC_ORDER.map(t => byTactic[t].reduce((s,d)=>s+d.cnt,0)), 1);
+
+  for (const tactic of TACTIC_ORDER) {
+    const techs = byTactic[tactic] || [];
+    const tc = TACTIC_CLR[tactic] || '#555';
+    const tacticCnt = techs.reduce((s,d) => s+d.cnt, 0);
+    const lane = document.createElement('div');
+    lane.className = 'tactic-lane';
+
+    const barPct = (tacticCnt / maxTacticCnt * 100).toFixed(1);
+    lane.innerHTML = `
+      <div class="tactic-hdr">
+        <span class="tactic-label" style="color:${tc}">${tactic}</span>
+        <span class="tactic-id-tag" style="color:${tc}99;background:${tc}18;border:1px solid ${tc}33">${TACTIC_IDS[tactic]||''}</span>
+        <div class="tactic-bar"><div class="tactic-bar-fill" style="width:${barPct}%;background:${tc}"></div></div>
+        <span class="tactic-count ${tacticCnt>0?'active':''}">${tacticCnt>0?tacticCnt+' hit'+(tacticCnt!==1?'s':''):'no activity'}</span>
+      </div>`;
+
+    const grid = document.createElement('div');
+    grid.className = 'tech-grid';
+
+    if (!techs.length) {
+      grid.innerHTML = '<span class="no-activity">No detections in this period</span>';
+    } else {
+      techs.sort((a,b) => b.cnt - a.cnt).forEach(tech => {
+        const heat = tech.cnt>=20?4:tech.cnt>=10?3:tech.cnt>=5?2:tech.cnt>=1?1:0;
+        const card = document.createElement('div');
+        card.className = `tech-card heat-${heat}`;
+        if (heat >= 2) { card.style.borderColor=tc+'55'; card.style.background=tc+'12'; }
+        const barW = (tech.cnt / maxCnt * 100).toFixed(1);
+        const nameParts = (tech.mitre_technique||'').split(':');
+        card.innerHTML = `
+          <div class="tc-id" style="color:${tc}bb">${esc(tech.mitre_technique_id||'')}</div>
+          <div class="tc-tactic" style="color:${tc}88">${esc(tactic)}</div>
+          <div class="tc-name" style="color:${heat>=2?tc:'var(--text)'}">${esc(nameParts[0]||'')}</div>
+          ${nameParts[1]?`<div class="tc-sub">${esc(nameParts[1].trim())}</div>`:''}
+          ${tech.mitre_subtechnique_id?`<div class="tc-sub" style="color:${tc}88">${esc(tech.mitre_subtechnique_id)}</div>`:''}
+          <div class="tc-cnt" style="color:${tc}">${tech.cnt} hit${tech.cnt!==1?'s':''}</div>
+          <div class="tc-bar"><div class="tc-bar-fill" style="width:${barW}%;background:${tc}"></div></div>`;
+        card.addEventListener('click', () => {
+          S.tacticFilter = tactic;
+          S.searchFilter = '';
+          document.getElementById('f-tactic').value = tactic;
+          document.getElementById('f-search').value = '';
+          document.querySelector('[data-tab="logs"]').click();
+          loadInitial();
+        });
+        grid.appendChild(card);
+      });
+    }
+    lane.appendChild(grid);
+    body.appendChild(lane);
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+// Timeline chart
+// ═══════════════════════════════════════════════════════
+let chart;
+async function loadTimeline() {
+  try {
+    const data = await fetchJson('/api/timeline?minutes=60');
+    renderChart(data);
+  } catch(e) {}
+}
+function renderChart(data) {
+  const mins = {};
+  for (const r of data) {
+    if (!mins[r.minute]) mins[r.minute] = {INFO:0,WARNING:0,ERROR:0,CRITICAL:0};
+    mins[r.minute][r.level] = (mins[r.minute][r.level]||0) + r.count;
+  }
+  const labels = Object.keys(mins).map(m => m.slice(11,16));
+  const mk = (lv, clr) => ({
+    label:lv, data:Object.values(mins).map(m=>m[lv]||0),
+    borderColor:clr, backgroundColor:clr+'22', borderWidth:1.5,
+    pointRadius:0, tension:.3, fill:true,
+  });
+  const ctx = document.getElementById('timeline-chart').getContext('2d');
+  if (chart) chart.destroy();
+  chart = new Chart(ctx, {
+    type:'line',
+    data:{labels, datasets:[mk('CRITICAL',LEVEL_CLR.CRITICAL),mk('ERROR',LEVEL_CLR.ERROR),mk('WARNING',LEVEL_CLR.WARNING),mk('INFO',LEVEL_CLR.INFO)]},
+    options:{
+      responsive:true, maintainAspectRatio:false, animation:false,
+      interaction:{mode:'index',intersect:false},
+      plugins:{legend:{display:false},tooltip:{backgroundColor:'#0b1017',borderColor:'#18232f',borderWidth:1,titleColor:'#b4c8d8',bodyColor:'#3a5268',titleFont:{family:'JetBrains Mono',size:10},bodyFont:{family:'JetBrains Mono',size:10}}},
+      scales:{
+        x:{display:false},
+        y:{display:true,min:0,grid:{color:'#18232f'},ticks:{color:'#3a5268',font:{family:'JetBrains Mono',size:8},maxTicksLimit:3}},
+      },
+    },
+  });
+}
+
+// ═══════════════════════════════════════════════════════
+// Stats & level bars
+// ═══════════════════════════════════════════════════════
+function schedStats() {
+  S.statsDirty = true;
+  if (!S.statsTimer) S.statsTimer = setTimeout(flushStats, STATS_DEFERRED_MS);
+}
+function flushStats() {
+  S.statsTimer = null;
+  S.statsDirty = false;
+  renderLvBars();
+  renderLvFilters();
+}
+
+function countLevel(lv, n) {
+  if (lv in S.levels) S.levels[lv] += n;
+}
+
+function renderLvBars() {
+  const max = Math.max(...Object.values(S.levels), 1);
+  document.getElementById('lv-bars').innerHTML = Object.entries(S.levels)
+    .sort((a,b)=>b[1]-a[1])
+    .map(([lv,cnt]) => `
+      <div class="lv-bar-row">
+        <span class="k">${lv}</span>
+        <div class="lv-track"><div class="lv-fill" style="width:${(cnt/max*100).toFixed(1)}%;background:${LEVEL_CLR[lv]}"></div></div>
+        <span class="v">${cnt}</span>
+      </div>`).join('');
+}
+
+function renderLvFilters() {
+  const c = document.getElementById('lvl-filters');
+  c.innerHTML = ['DEBUG','INFO','WARNING','ERROR','CRITICAL'].map(lv => `
+    <div class="lvl-btn ${S.levelFilter===lv?'active':''}" data-lv="${lv}">
+      <div class="lvl-dot" style="background:${LEVEL_CLR[lv]}"></div>
+      <span class="lvl-name">${lv}</span>
+      <span class="lvl-cnt">${S.levels[lv]||0}</span>
+    </div>`).join('');
+  c.querySelectorAll('.lvl-btn').forEach(b => b.addEventListener('click', () => {
+    S.levelFilter = S.levelFilter === b.dataset.lv ? null : b.dataset.lv;
+    renderLvFilters();
+    loadInitial();
+  }));
+}
+
+async function loadStats() {
+  try {
+    const s = await fetchJson('/api/stats');
+    setKPI('k-total', fmt(s.total_entries), 'c-accent');
+    setKPI('k-anom', fmt(s.anomaly_count), 'c-red');
+    setKPI('k-fim', s.fim_baseline?.toString()||'0', 'c-teal');
+    setKPI('k-rate', (s.recent_rate||0).toString());
+    const tacticHits = Object.values(s.tactic_counts||{}).reduce((a,b)=>a+b,0);
+    setKPI('k-tactics', Object.keys(s.tactic_counts||{}).length.toString(), 'c-red');
+
+    S.levels = Object.assign({DEBUG:0,INFO:0,WARNING:0,ERROR:0,CRITICAL:0}, s.by_level);
+    renderLvBars();
+    renderLvFilters();
+    renderCatBreakdown(s.categories||{});
+
+    document.getElementById('ml-status').textContent = s.ml_ready?'READY':s.ml_buffer>100?'TRAINING':'WAITING';
+    document.getElementById('ml-status').className = 'v '+(s.ml_ready?'v-ready':s.ml_buffer>100?'v-training':'v-waiting');
+    const trainSize = s.ml_train_size || 800;
+    document.getElementById('ml-buffer').textContent = `${s.ml_buffer||0} / ${trainSize}`;
+    document.getElementById('ml-train-size').textContent = trainSize;
+    document.getElementById('ml-prog').style.width = Math.min(100, Math.round(((s.ml_buffer||0)/trainSize)*100))+'%';
+
+    // Alert KPI from stats
+    setKPI('k-alerts', (s.unacked_alerts||0).toString(), s.unacked_alerts>0?'c-yellow':'c-muted');
+    document.getElementById('rp-alert-cnt').textContent = s.unacked_alerts||0;
+    if ((s.unacked_alerts||0)>0) document.getElementById('rp-alert-cnt').classList.add('hot');
+  } catch(e) {}
+}
+
+function renderCatBreakdown(cats) {
+  document.getElementById('cat-breakdown').innerHTML = Object.entries(cats)
+    .sort((a,b)=>b[1]-a[1])
+    .map(([k,v]) => `
+      <div class="cat-row">
+        <div class="cat-dot" style="background:${CAT_CLR[k]||'#555'}"></div>
+        <span class="cat-name">${k}</span>
+        <span class="cat-val">${v}</span>
+      </div>`).join('');
+}
+
+// ═══════════════════════════════════════════════════════
+// Load initial log stream
+// ═══════════════════════════════════════════════════════
+async function loadInitial() {
+  try {
+    const params = new URLSearchParams({limit:300});
+    if (S.levelFilter)  params.set('level',   S.levelFilter);
+    if (S.sourceFilter) params.set('source',  S.sourceFilter);
+    if (S.searchFilter || S.searchFilter) params.set('search', S.searchFilter);
+    if (S.anomalyOnly)  params.set('anomaly_only','true');
+    if (S.catFilter)    params.set('category', S.catFilter);
+    if (S.tacticFilter) params.set('mitre_tactic', S.tacticFilter);
+
+    const entries = await fetchJson('/api/logs?' + params);
+    const stream = document.getElementById('log-stream');
+    stream.innerHTML = '';
+    S.levels = {DEBUG:0,INFO:0,WARNING:0,ERROR:0,CRITICAL:0};
+    const frag = document.createDocumentFragment();
+    for (const e of entries) {
+      countLevel(e.level, 1);
+      frag.appendChild(makeLogRow(e, false));
+    }
+    stream.appendChild(frag);
+    renderLvBars(); renderLvFilters();
+    document.getElementById('tb-logs').textContent = entries.length > 999 ? '999+' : entries.length;
+  } catch(e) { console.error(e); }
+}
+
+// ═══════════════════════════════════════════════════════
+// Tab routing
+// ═══════════════════════════════════════════════════════
+document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => {
+  const id = t.dataset.tab;
+  S.currentTab = id;
+  document.querySelectorAll('.tab').forEach(x => x.classList.toggle('active', x.dataset.tab===id));
+  document.querySelectorAll('.panel').forEach(p => p.classList.toggle('active', p.id===`panel-${id}`));
+  // Reset badge
+  const badge = document.getElementById(`tb-${id==='attack'?'attack':id}`);
+  if (badge && id !== 'logs') badge.textContent = '0';
+  // Load tab data
+  if (id === 'alerts')  loadAlertsTab();
+  if (id === 'network') loadNetworkTab();
+  if (id === 'fim')     loadFimTab();
+  if (id === 'attack')  loadAttackTab();
+}));
+
+// ═══════════════════════════════════════════════════════
+// Controls
+// ═══════════════════════════════════════════════════════
+document.getElementById('btn-pause').addEventListener('click', function() {
+  S.paused = !S.paused;
+  this.textContent = S.paused ? '▶ RESUME' : '⏸ PAUSE';
+  this.classList.toggle('active', S.paused);
+  this.classList.toggle('danger', S.paused);
+});
+
+document.getElementById('btn-clear').addEventListener('click', () => {
+  document.getElementById('log-stream').innerHTML = '<div class="stream-empty">Stream cleared.</div>';
+  S.levels = {DEBUG:0,INFO:0,WARNING:0,ERROR:0,CRITICAL:0};
+  renderLvBars(); renderLvFilters();
+});
+
+document.getElementById('btn-export').addEventListener('click', async () => {
+  const data = await fetchJson('/api/logs?limit=1000');
+  const b = new Blob([JSON.stringify(data, null, 2)], {type:'application/json'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(b);
+  a.download = `logagg-${new Date().toISOString().slice(0,19)}.json`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+});
+
+document.getElementById('btn-refresh').addEventListener('click', loadInitial);
+document.getElementById('btn-retrain').addEventListener('click', async () => {
+  await fetch('/api/retrain', {method:'POST'});
+  loadStats();
+});
+
+document.getElementById('btn-ack-all').addEventListener('click', async () => {
+  await fetch('/api/alerts/acknowledge_all', {method:'POST'});
+  S.alertsData.forEach(a => a.acknowledged = 1);
+  renderAlertsTab();
+  updateAlertKPI();
+});
+
+document.getElementById('btn-reload-alerts').addEventListener('click', loadAlertsTab);
+document.getElementById('btn-view-alerts').addEventListener('click', () => {
+  document.querySelector('[data-tab="alerts"]').click();
+});
+document.getElementById('btn-attack-reload').addEventListener('click', loadAttackTab);
+document.getElementById('attack-hours').addEventListener('change', loadAttackTab);
+
+// Search & filters
+let _searchDebounce;
+document.getElementById('f-search').addEventListener('input', function() {
+  clearTimeout(_searchDebounce);
+  S.searchFilter = this.value.trim();
+  _searchDebounce = setTimeout(loadInitial, 350);
+});
+document.getElementById('search').addEventListener('input', function() {
+  clearTimeout(_searchDebounce);
+  S.searchFilter = this.value.trim();
+  document.getElementById('f-search').value = this.value;
+  _searchDebounce = setTimeout(loadInitial, 350);
+});
+document.getElementById('f-source').addEventListener('input', function() {
+  clearTimeout(_searchDebounce);
+  S.sourceFilter = this.value.trim();
+  _searchDebounce = setTimeout(loadInitial, 350);
+});
+document.getElementById('f-cat').addEventListener('change', function() { S.catFilter = this.value; loadInitial(); });
+document.getElementById('f-tactic').addEventListener('change', function() { S.tacticFilter = this.value; loadInitial(); });
+
+document.getElementById('alerts-search').addEventListener('input', function() {
+  S.alertFilter = this.value.trim();
+  renderAlertsTab();
+});
+document.getElementById('alerts-sev-filter').addEventListener('change', function() {
+  S.alertSevFilter = this.value;
+  renderAlertsTab();
+});
+
+function setupToggle(rowId, togId, key, cb) {
+  document.getElementById(rowId).addEventListener('click', () => {
+    S[key] = !S[key];
+    document.getElementById(togId).classList.toggle('on', S[key]);
+    cb();
+  });
+}
+setupToggle('tr-anomaly','tog-anomaly','anomalyOnly', loadInitial);
+setupToggle('tr-live',   'tog-live',   'live',        ()=>{});
+setupToggle('tr-wrap',   'tog-wrap',   'wrapMsgs',    ()=>{
+  document.querySelectorAll('.r-msg').forEach(el =>
+    el.classList.toggle('wrap', S.wrapMsgs));
+});
+
+// ═══════════════════════════════════════════════════════
+// Ingest rate meter
+// ═══════════════════════════════════════════════════════
+setInterval(() => {
+  const rate = S.ingestCount;
+  S.ingestCount = 0;
+  document.getElementById('ingest-rate').textContent = `${rate} ev/s`;
+  document.getElementById('ingest-rate').style.color = rate>50?'var(--red)':rate>10?'var(--yellow)':'var(--muted2)';
+}, 1000);
+
+// ═══════════════════════════════════════════════════════
+// Utilities
+// ═══════════════════════════════════════════════════════
+function esc(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function fmt(n) {
+  return n >= 1e6 ? (n/1e6).toFixed(1)+'M' : n >= 1e3 ? (n/1e3).toFixed(1)+'K' : String(n||0);
+}
+function setKPI(id, val, cls) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  if (el.textContent !== val) el.textContent = val;
+  if (cls) el.className = 'kpi-val ' + cls;
+}
+function bumpBadge(tab, n=1, set=false) {
+  const el = document.getElementById('tb-'+tab);
+  if (!el) return;
+  const cur = parseInt(el.textContent||'0');
+  const next = set ? n : cur + n;
+  el.textContent = next > 9999 ? '9999+' : next;
+  if (next > 0) { el.classList.add('hot'); setTimeout(()=>el.classList.remove('hot'),500); }
+}
+async function fetchJson(url) {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(r.status);
+  return r.json();
+}
+function loadAll() {
+  loadInitial();
+  loadStats();
+  loadTimeline();
+  // Load alerts into memory for right panel
+  fetchJson('/api/alerts?limit=50').then(data => {
+    S.alertsData = data;
+    renderRPAlerts();
+    updateAlertKPI();
+  }).catch(()=>{});
+}
+
+// ═══════════════════════════════════════════════════════
+// Periodic background refresh
+// ═══════════════════════════════════════════════════════
+setInterval(loadStats,    20_000);
+setInterval(loadTimeline, 45_000);
+setInterval(() => {
+  fetchJson('/api/alerts?limit=50').then(data => {
+    S.alertsData = data;
+    renderRPAlerts();
+    updateAlertKPI();
+  }).catch(()=>{});
+}, 30_000);
+
+// ═══════════════════════════════════════════════════════
+// Bootstrap
+// ═══════════════════════════════════════════════════════
+renderLvFilters();
+</script>
+</body>
+</html>
